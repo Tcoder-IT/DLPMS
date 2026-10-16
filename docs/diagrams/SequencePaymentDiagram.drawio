@@ -1,0 +1,107 @@
+<mxfile host="Electron" modified="2023-10-24T00:00:00.000Z" agent="Mozilla/5.0" version="21.0.0" type="device">
+  <diagram id="diagram_1" name="Page-1">
+    <mxGraphModel dx="1000" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="2" value="Citizen" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;participant=umlActor;" vertex="1" parent="1">
+          <mxGeometry x="100" y="50" width="40" height="850" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="DLPMS Backend" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="300" y="50" width="100" height="850" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="telebirr Gateway" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="500" y="50" width="100" height="850" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="Tax Record DB" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="700" y="50" width="100" height="850" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="Notification Service" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="900" y="50" width="100" height="850" as="geometry"/>
+        </mxCell>
+        <mxCell id="7" value="1. Initiate payment" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="120" y="150" as="sourcePoint"/>
+            <mxPoint x="350" y="150" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="8" value="2. Validate &amp; forward request" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="200" as="sourcePoint"/>
+            <mxPoint x="550" y="200" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="9" value="3. Return payment URL / USSD push" style="html=1;verticalAlign=bottom;rounded=0;endArrow=open;dashed=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="250" as="sourcePoint"/>
+            <mxPoint x="120" y="250" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="10" value="4. Complete payment on phone" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="120" y="300" as="sourcePoint"/>
+            <mxPoint x="550" y="300" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="11" value="5. Asynchronous webhook callback" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="350" as="sourcePoint"/>
+            <mxPoint x="350" y="350" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="12" value="6. Validate webhook signature" style="edgeStyle=orthogonalEdgeStyle;html=1;align=left;spacingLeft=2;endArrow=block;rounded=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="400" as="sourcePoint"/>
+            <mxPoint x="350" y="430" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="390" y="400"/>
+              <mxPoint x="390" y="430"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="13" value="7. Update Tax Record status" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="480" as="sourcePoint"/>
+            <mxPoint x="750" y="480" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="14" value="Status updated" style="html=1;verticalAlign=bottom;rounded=0;endArrow=open;dashed=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="750" y="530" as="sourcePoint"/>
+            <mxPoint x="350" y="530" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="15" value="8. Trigger SMS confirmation" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="580" as="sourcePoint"/>
+            <mxPoint x="950" y="580" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="16" value="SMS sent" style="html=1;verticalAlign=bottom;rounded=0;endArrow=open;dashed=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="950" y="630" as="sourcePoint"/>
+            <mxPoint x="120" y="630" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="17" value="9. Trigger Email receipt" style="html=1;verticalAlign=bottom;rounded=0;endArrow=block;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="680" as="sourcePoint"/>
+            <mxPoint x="950" y="680" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="18" value="Email sent" style="html=1;verticalAlign=bottom;rounded=0;endArrow=open;dashed=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="950" y="730" as="sourcePoint"/>
+            <mxPoint x="120" y="730" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="19" value="10. Return success response" style="html=1;verticalAlign=bottom;rounded=0;endArrow=open;dashed=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="780" as="sourcePoint"/>
+            <mxPoint x="120" y="780" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

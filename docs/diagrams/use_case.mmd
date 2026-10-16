@@ -1,0 +1,91 @@
+flowchart LR
+    %% Actors
+    Citizen([Citizen])
+    LandOfficer([Land Officer])
+    TaxOfficial([Tax Official])
+    GISOfficer([GIS Officer])
+    Admin([System Admin])
+
+    %% System Boundary
+    subgraph DLPMS [Digital Land and Property Management System]
+        direction TB
+        UC1(Apply for Transfer)
+        UC2(Make Payment)
+        UC3(Book Appointment)
+        UC4(Register)
+        UC5(Login)
+        UC6(View Land Records)
+        UC7(Upload Documents)
+        UC8(Track Status)
+        UC9(Download Certificate)
+        UC10(Search Public Records)
+        
+        UC_Auth(Authenticate User)
+        UC_Receipt(Generate Tax Receipt)
+        UC_SMS(Send SMS Notification)
+
+        UC11(Process Registration)
+        UC12(Verify Documents)
+        UC13(Approve Transfer)
+        UC14(Reject Transfer)
+        UC15(Generate Reports)
+        UC16(Search CIS)
+        
+        UC_UploadBound(Upload Boundary)
+
+        UC17(Calculate Tax)
+        UC18(Record Offline Payment)
+        UC19(View Dashboard)
+        UC20(Generate Tax Report)
+
+        UC22(Verify Boundary)
+        UC23(View Maps)
+
+        UC24(Manage Users)
+        UC25(View Audit Logs)
+        UC26(Configure System)
+        UC27(Perform Backup)
+    end
+
+    Citizen --> UC4
+    Citizen --> UC5
+    Citizen --> UC1
+    Citizen --> UC2
+    Citizen --> UC3
+    Citizen --> UC6
+    Citizen --> UC7
+    Citizen --> UC8
+    Citizen --> UC9
+    Citizen --> UC10
+
+    UC1 -.->|<<include>>| UC_Auth
+    UC2 -.->|<<extend>>| UC_Receipt
+    UC3 -.->|<<include>>| UC_SMS
+
+    LandOfficer --> UC11
+    LandOfficer --> UC12
+    LandOfficer --> UC13
+    LandOfficer --> UC14
+    LandOfficer --> UC15
+    LandOfficer --> UC16
+
+    UC13 -.->|<<include>>| UC12
+    UC11 -.->|<<extend>>| UC_UploadBound
+
+    TaxOfficial --> UC17
+    TaxOfficial --> UC18
+    TaxOfficial --> UC19
+    TaxOfficial --> UC_Receipt
+    TaxOfficial --> UC20
+
+    GISOfficer --> UC_UploadBound
+    GISOfficer --> UC22
+    GISOfficer --> UC23
+
+    Admin --> UC24
+    Admin --> UC25
+    Admin --> UC26
+    Admin --> UC27
+
+    classDef actor fill:#f9f,stroke:#333,stroke-width:2px;
+    class Citizen,LandOfficer,TaxOfficial,GISOfficer,Admin actor;

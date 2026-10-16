@@ -1,0 +1,38 @@
+sequenceDiagram
+    actor Citizen
+    participant Backend as DLPMS Backend
+    participant Gateway as telebirr Gateway
+    participant DB as Tax Record Database
+    participant Notif as Notification Service
+
+    Citizen->>Backend: 1. Initiate payment (select parcel, confirm amount)
+    activate Backend
+    Backend->>Gateway: 2. Validate & forward request
+    activate Gateway
+    Gateway-->>Citizen: 3. Return payment URL / USSD push
+    deactivate Gateway
+    
+    Citizen->>Gateway: 4. Complete payment on phone
+    activate Gateway
+    Gateway->>Backend: 5. Asynchronous webhook callback
+    deactivate Gateway
+    
+    Backend->>Backend: 6. Validate webhook signature
+    
+    Backend->>DB: 7. Update Tax Record status
+    activate DB
+    DB-->>Backend: Status updated
+    deactivate DB
+    
+    Backend->>Notif: 8. Trigger SMS confirmation
+    activate Notif
+    Notif-->>Citizen: SMS sent
+    deactivate Notif
+    
+    Backend->>Notif: 9. Trigger Email receipt
+    activate Notif
+    Notif-->>Citizen: Email sent
+    deactivate Notif
+    
+    Backend-->>Citizen: 10. Return success response
+    deactivate Backend

@@ -1,0 +1,43 @@
+sequenceDiagram
+    actor Officer as Land Officer
+    participant Backend as DLPMS Backend
+    participant CIS as CIS Database
+    participant Audit as Audit Log
+    participant Notif as Notification Service
+
+    Officer->>Backend: 1. Review pending transfer request
+    activate Backend
+    Officer->>Backend: 2. Select request for processing
+    
+    Backend->>CIS: 3. Retrieve documents & parcel details
+    activate CIS
+    CIS-->>Backend: Data returned
+    deactivate CIS
+    
+    Backend-->>Officer: Display data
+    deactivate Backend
+    
+    Officer->>Officer: 4. Verify uploaded documents
+    
+    Officer->>Backend: 5. Submit approval with comments
+    activate Backend
+    
+    Backend->>Backend: 6. Validate rules (tax clearance, eligibility)
+    
+    Backend->>CIS: 7. Update land ownership record
+    activate CIS
+    CIS-->>Backend: Record updated
+    deactivate CIS
+    
+    Backend->>Audit: 8. Create immutable audit entry
+    activate Audit
+    Audit-->>Backend: Logged (ID, timestamp, state)
+    deactivate Audit
+    
+    Backend->>Notif: 9. Trigger SMS & Email (Seller & Buyer)
+    activate Notif
+    Notif-->>Officer: Notifications queued
+    deactivate Notif
+    
+    Backend-->>Officer: 10. Return success confirmation
+    deactivate Backend
