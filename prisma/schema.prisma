@@ -1,0 +1,515 @@
+// DLPMS Prisma schema — Milestone 3
+//
+// Implements the conceptual entity catalogue documented in DATABASE_DESIGN.md.
+// Provider is postgresql per PROJECT_DECISIONS.md (PostgreSQL/PostGIS is the DLPMS database).
+// GIS boundary is modeled as Json pending the PostGIS extension milestone; the production
+// schema will replace `boundary` with `Unsupported("geometry(Polygon,4326)")` and a GiST index
+// once migrations are applied against a PostGIS-enabled database.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum RoleCode {
+  Citizen
+  LandOfficer
+  TaxOfficial
+  GISOfficer
+  SystemAdmin
+}
+
+enum BoundaryStatus {
+  Pending
+  Verified
+  OverlapConflict
+  Rejected
+}
+
+enum TransferStatus {
+  Draft
+  Submitted
+  TaxVerified
+  TaxHold
+  UnderReview
+  DocumentsRequested
+  Approved
+  Rejected
+  Cancelled
+}
+
+enum PaymentStatus {
+  Initiated
+  Pending
+  Processing
+  Completed
+  Failed
+  Refunded
+}
+
+enum DocumentVerificationStatus {
+  Pending
+  Verified
+  Rejected
+  AdditionalRequested
+}
+
+enum AppointmentStatus {
+  Scheduled
+  Completed
+  Cancelled
+  NoShow
+}
+
+enum NotificationStatus {
+  Queued
+  Sent
+  Failed
+  Suppressed
+}
+
+enum CertificateStatus {
+  Active
+  Revoked
+  Replaced
+}
+
+enum TaxRecordStatus {
+  Calculated
+  PartiallyPaid
+  Paid
+  Hold
+  Cleared
+}
+
+enum PaymentMethod {
+  OnlineTelebirr
+  OfflineCounter
+  Credit
+}
+
+enum AuditAction {
+  Create
+  Update
+  Delete
+  View
+  Approve
+  Reject
+  Login
+  Logout
+  OtpIssue
+  OtpVerify
+  RoleAssign
+  Deactivate
+  Refund
+  BoundaryVerify
+}
+
+// ---------------------------------------------------------------------------
+// Identity & access
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        RoleCode  @unique
+  name        String
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id                 String    @id @default(uuid()) @db.Uuid
+  roleId             String    @db.Uuid
+  phoneNumber        String    @unique
+  normalizedPhone     String    @unique
+  email              String?   @unique
+  passwordHash        String
+  active             Boolean   @default(true)
+  preferredLanguage  String    @default("en")
+  otpCodeHash        String?
+  otpIssuedAt        DateTime?
+  otpAttempts        Int       @default(0)
+  otpVerifiedAt      DateTime?
+  passwordResetToken String?
+  passwordResetAt    DateTime?
+  lastLoginAt        DateTime?
+  lastRefreshTokenJti String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  version             Int      @default(1)
+
+  role              Role              @relation(fields: [roleId], references: [id])
+  ownerProfile      OwnerProfile?
+  auditLogs         AuditLog[]
+  notifications      Notification[]
+  appointmentsAsOfficer Appointment[]
+
+  @@index([roleId])
+  @@map("users")
+}
+
+model OwnerProfile {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @db.Uuid
+  fullName       String
+  nationalId     String    @unique
+  physicalAddress String
+  contactPhone   String?
+  contactEmail   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  version        Int       @default(1)
+
+  user             User              @relation(fields: [userId], references: [id])
+  parcels          LandParcel[]
+  ownershipHistory OwnershipHistory[]
+  transfersAsSeller TransferRequest[] @relation("TransferSeller")
+  transfersAsBuyer  TransferRequest[] @relation("TransferBuyer")
+  certificates     Certificate[]
+  appointments     Appointment[]
+  paymentsAsPayer  PaymentTransaction[]
+
+  @@map("owner_profiles")
+}
+
+// ---------------------------------------------------------------------------
+// Land registry
+// ---------------------------------------------------------------------------
+
+model LandParcel {
+  id             String          @id @default(uuid()) @db.Uuid
+  parcelNumber   String          @unique
+  currentOwnerId String?         @db.Uuid
+  subCity        String
+  kebele         String
+  location       String
+  declaredSize   Decimal         @db.Decimal(14, 4)
+  sizeUnit       String           @default("square_meters")
+  landUseType    String
+  boundaryJson   Json?
+  boundaryStatus BoundaryStatus  @default(Pending)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  version        Int             @default(1)
+
+  currentOwner     OwnerProfile?      @relation(fields: [currentOwnerId], references: [id])
+  properties       Property[]
+  ownershipHistory OwnershipHistory[]
+  transfers        TransferRequest[]
+  taxRecords       TaxRecord[]
+  certificates     Certificate[]
+
+  @@index([currentOwnerId])
+  @@index([subCity, kebele])
+  @@map("land_parcels")
+}
+
+model Property {
+  id            String    @id @default(uuid()) @db.Uuid
+  parcelId      String    @db.Uuid
+  propertyType  String
+  assessmentData Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  version       Int       @default(1)
+
+  parcel LandParcel @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+
+  @@index([parcelId])
+  @@map("properties")
+}
+
+model OwnershipHistory {
+  id               String      @id @default(uuid()) @db.Uuid
+  parcelId         String      @db.Uuid
+  ownerId          String      @db.Uuid
+  acquiredAt       DateTime
+  acquisitionMethod String
+  startedAt        DateTime    @default(now())
+  endedAt          DateTime?
+  sourceTransferId String?     @unique @db.Uuid
+  createdAt        DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  parcel  LandParcel     @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  owner   OwnerProfile   @relation(fields: [ownerId], references: [id])
+  sourceTransfer TransferRequest? @relation(fields: [sourceTransferId], references: [id])
+
+  @@index([parcelId])
+  @@index([ownerId])
+  @@map("ownership_history")
+}
+
+// ---------------------------------------------------------------------------
+// Transfer workflow
+// ---------------------------------------------------------------------------
+
+model TransferRequest {
+  id               String          @id @default(uuid()) @db.Uuid
+  trackingId       String          @unique
+  parcelId         String          @db.Uuid
+  sellerOwnerId   String          @db.Uuid
+  buyerOwnerId     String          @db.Uuid
+  buyerSnapshot    Json
+  salePrice        Decimal         @db.Decimal(14, 2)
+  status           TransferStatus @default(Draft)
+  assignedOfficerId String?       @db.Uuid
+  submittedAt      DateTime?
+  reviewedAt       DateTime?
+  decisionReason   String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  version          Int             @default(1)
+
+  parcel       LandParcel        @relation(fields: [parcelId], references: [id])
+  seller       OwnerProfile      @relation("TransferSeller", fields: [sellerOwnerId], references: [id])
+  buyer        OwnerProfile      @relation("TransferBuyer", fields: [buyerOwnerId], references: [id])
+  documents    TransferDocument[]
+  certificates Certificate[]
+  sourceOwnershipHistory OwnershipHistory?
+
+  @@index([parcelId])
+  @@index([status])
+  @@map("transfer_requests")
+}
+
+model TransferDocument {
+  id               String                    @id @default(uuid()) @db.Uuid
+  transferId       String                    @db.Uuid
+  documentMetaId   String                    @db.Uuid
+  documentType     String
+  verificationStatus DocumentVerificationStatus @default(Pending)
+  verificationReason String?
+  verifiedById     String?                   @db.Uuid
+  verifiedAt       DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  version          Int                       @default(1)
+
+  transfer      TransferRequest  @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  documentMeta DocumentMetadata  @relation(fields: [documentMetaId], references: [id])
+
+  @@index([transferId])
+  @@map("transfer_documents")
+}
+
+// ---------------------------------------------------------------------------
+// Tax & payments
+// ---------------------------------------------------------------------------
+
+model TaxRecord {
+  id              String          @id @default(uuid()) @db.Uuid
+  parcelId        String          @db.Uuid
+  taxYear         Int
+  calculatedAmount Decimal        @db.Decimal(14, 2)
+  paidAmount      Decimal         @default(0) @db.Decimal(14, 2)
+  creditBalance   Decimal         @default(0) @db.Decimal(14, 2)
+  status          TaxRecordStatus @default(Calculated)
+  holdActive      Boolean         @default(false)
+  calculationSnapshot Json?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  version         Int             @default(1)
+
+  parcel     LandParcel          @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+  payments   PaymentTransaction[]
+
+  @@unique([parcelId, taxYear])
+  @@index([status])
+  @@map("tax_records")
+}
+
+model PaymentTransaction {
+  id               String          @id @default(uuid()) @db.Uuid
+  taxRecordId      String          @db.Uuid
+  payerOwnerId     String          @db.Uuid
+  transactionRef   String          @unique
+  amount           Decimal         @db.Decimal(14, 2)
+  method           PaymentMethod
+  status           PaymentStatus   @default(Initiated)
+  providerRef      String?
+  providerPayload  Json?
+  initiatedAt      DateTime        @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  version          Int             @default(1)
+
+  taxRecord TaxRecord @relation(fields: [taxRecordId], references: [id], onDelete: Cascade)
+  payer     OwnerProfile @relation(fields: [payerOwnerId], references: [id])
+
+  @@index([taxRecordId])
+  @@index([status])
+  @@map("payment_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Appointments
+// ---------------------------------------------------------------------------
+
+model AppointmentSlot {
+  id            String    @id @default(uuid()) @db.Uuid
+  officerId     String    @db.Uuid
+  serviceType   String
+  startsAt      DateTime
+  endsAt        DateTime
+  capacity      Int       @default(1)
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  appointments Appointment[]
+
+  @@unique([officerId, startsAt, endsAt])
+  @@index([officerId, startsAt])
+  @@map("appointment_slots")
+}
+
+model Appointment {
+  id            String             @id @default(uuid()) @db.Uuid
+  citizenOwnerId String            @db.Uuid
+  officerId     String             @db.Uuid
+  slotId        String?            @db.Uuid
+  serviceType   String
+  scheduledAt   DateTime
+  status        AppointmentStatus  @default(Scheduled)
+  purpose       String?
+  cancellationReason String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  version        Int                @default(1)
+
+  citizen    OwnerProfile @relation(fields: [citizenOwnerId], references: [id])
+  officer    User         @relation(fields: [officerId], references: [id])
+  slot       AppointmentSlot? @relation(fields: [slotId], references: [id])
+
+
+  @@index([officerId, scheduledAt])
+  @@map("appointments")
+}
+
+// ---------------------------------------------------------------------------
+// Documents & certificates
+// ---------------------------------------------------------------------------
+
+model DocumentMetadata {
+  id              String    @id @default(uuid()) @db.Uuid
+  uploadedById     String    @db.Uuid
+  storageAdapter  String    @default("mock")
+  storageKey      String
+  originalFilename String
+  safeFilename    String
+  mediaType       String
+  byteSize        BigInt
+  checksum        String
+  classification  String    @default("restricted")
+  scanStatus      String    @default("pending")
+  uploadedAt      DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  version         Int       @default(1)
+
+  transferDocuments TransferDocument[]
+  certificates      Certificate[]
+
+  @@map("document_metadata")
+}
+
+model Certificate {
+  id              String             @id @default(uuid()) @db.Uuid
+  parcelId        String             @db.Uuid
+  ownerId         String             @db.Uuid
+  transferId      String?            @db.Uuid
+  documentMetaId  String?            @db.Uuid
+  certificateNumber String           @unique
+  status          CertificateStatus  @default(Active)
+  issuedAt        DateTime           @default(now())
+  revokedAt       DateTime?
+  qrPayload       String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  version         Int                @default(1)
+
+  parcel       LandParcel       @relation(fields: [parcelId], references: [id])
+  owner        OwnerProfile      @relation(fields: [ownerId], references: [id])
+  transfer     TransferRequest? @relation(fields: [transferId], references: [id])
+  documentMeta DocumentMetadata? @relation(fields: [documentMetaId], references: [id])
+
+  @@index([parcelId])
+  @@map("certificates")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications & audit
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id              String             @id @default(uuid()) @db.Uuid
+  recipientUserId String             @db.Uuid
+  channel         String
+  templateKey     String
+  payload         Json
+  status          NotificationStatus @default(Queued)
+  scheduledAt     DateTime?
+  sentAt          DateTime?
+  retryCount      Int                @default(0)
+  providerRef     String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  recipient User @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  @@index([recipientUserId, status])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id              String      @id @default(uuid()) @db.Uuid
+  actorUserId     String?     @db.Uuid
+  action          AuditAction
+  entityType      String
+  entityId        String?
+  requestId       String?
+  ipAddress       String?
+  oldSnapshot     Json?
+  newSnapshot     Json?
+  previousHash    String?
+  entryHash       String
+  createdAt       DateTime    @default(now())
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+model SystemSetting {
+  id          String    @id @default(uuid()) @db.Uuid
+  key         String    @unique
+  value       Json
+  description String?
+  updatedAt   DateTime  @updatedAt
+  updatedById String?   @db.Uuid
+
+  @@map("system_settings")
+}

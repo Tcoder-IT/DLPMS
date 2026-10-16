@@ -19,7 +19,11 @@ export default [
       globals: {
         console: 'readonly',
         document: 'readonly',
-        process: 'readonly'
+        process: 'readonly',
+        Buffer: 'readonly',
+        TextEncoder: 'readonly',
+        TextDecoder: 'readonly',
+        globalThis: 'readonly'
       }
     },
     plugins: { react },

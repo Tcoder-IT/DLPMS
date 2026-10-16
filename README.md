@@ -6,31 +6,49 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 
 - `apps/citizen-pwa` — React/Vite citizen Progressive Web App placeholder.
 - `apps/staff-portal` — React/Vite staff portal placeholder.
-- `apps/api` — Node.js/Express REST API foundation.
+- `apps/api` — Node.js/Express REST API.
 - `packages/shared-types` — dependency-free shared constants/types placeholder.
-- `prisma` — reserved for the approved Prisma schema and migrations; no schema exists in Milestone 2.
+- `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
+
+## Milestone 3 (current)
+
+Implements identity, RBAC, audit hash chain, parcels, profile, admin users, and audit-read endpoints. See `MILESTONE.md` for the full scope.
 
 ## Prerequisites
 
 - Node.js 22 or later
 - npm 10 or later
+- Docker (for local Postgres/PostGIS) or a reachable PostgreSQL 15+ / PostGIS 3.3+ instance
 
 ## Setup
 
-```powershell
-Copy-Item .env.example .env
-npm.cmd install
+```bash
+# Copy env and set a strong JWT_SECRET (>= 32 chars)
+cp .env.example .env
+
+# Start a local Postgres/PostGIS instance
+docker compose up -d db
+
+# Install (also generates the Prisma client via postinstall)
+npm install
+```
+
+## Run the database migrations + seed
+
+```bash
+npm --workspace @dlpms/api run prisma:migrate   # creates schema from prisma/schema.prisma
+npm --workspace @dlpms/api run seed              # seeds roles + bootstrap SystemAdmin
 ```
 
 ## Run locally
 
 Use three terminals:
 
-```powershell
-npm.cmd run dev:api
-npm.cmd run dev:citizen
-npm.cmd run dev:staff
+```bash
+npm run dev:api
+npm run dev:citizen
+npm run dev:staff
 ```
 
 - API health: `http://localhost:4000/api/v1/health`
@@ -40,12 +58,12 @@ npm.cmd run dev:staff
 
 ## Verification
 
-```powershell
-npm.cmd run lint
-npm.cmd run build
-npm.cmd run check
+```bash
+npm run lint
+npm run build
+npm run check
 ```
 
-## Milestone 2 limits
+## Future milestones
 
-No authentication, land registration, Prisma schema, payment, SMS, email, or production CIS integration is implemented. Those capabilities remain governed by the blueprint documents in the repository root.
+Per the blueprint documents, subsequent milestones will add transfers, tax/payment, GIS verification, appointments, certificates, document uploads, notifications dispatch, and frontend integration with the API. See `MILESTONE.md` for the boundary of what is and is not implemented in M3.
