@@ -5,11 +5,28 @@ function positivePort(value) {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 4000;
 }
 
-export const env = Object.freeze({
-  nodeEnv: process.env.NODE_ENV ?? 'development',
-  port: positivePort(process.env.API_PORT),
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://localhost:5174')
+function splitOrigins(value) {
+  return (value ?? '')
     .split(',')
     .map((origin) => origin.trim())
-    .filter(Boolean)
+    .filter(Boolean);
+}
+
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+export const env = Object.freeze({
+  nodeEnv: process.env.NODE_ENV ?? 'development',
+  isProduction: IS_PROD,
+  port: positivePort(process.env.API_PORT),
+  corsOrigins: splitOrigins(process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://localhost:5174'),
+  databaseUrl: process.env.DATABASE_URL ?? null,
+  jwtSecret: process.env.JWT_SECRET ?? null,
+  // Refresh tokens are stored hashed-by-jti against the users table; rotation/revocation
+  // is implemented by clearing User.lastRefreshTokenJti on logout (SECURITY_DESIGN.md).
+  accessTokenTtlSeconds: 60 * 15,
+  refreshTokenTtlSeconds: 60 * 60 * 24 * 7,
+  // OTP attempt budget per issued code (SECURITY_DESIGN.md: abuse controls required).
+  otpMaxAttempts: Number(process.env.OTP_MAX_ATTEMPTS ?? 5),
+  // Optional: when true, OTP is required as a second factor on login.
+  requireOtpOnLogin: process.env.REQUIRE_OTP_ON_LOGIN === 'true'
 });

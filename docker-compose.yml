@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    container_name: dlpms-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dlpms_user
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: dlpms
+    ports:
+      - "5432:5432"
+    volumes:
+      - dlpms-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dlpms_user -d dlpms"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  dlpms-pgdata:

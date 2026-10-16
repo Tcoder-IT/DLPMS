@@ -1,6 +1,6 @@
 {
   "name": "dlpms",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Digital Land and Property Management System for Dire Dawa",
@@ -14,11 +14,16 @@
     "dev:staff": "npm --workspace @dlpms/staff-portal run dev",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "check": "npm run lint && npm run build"
+    "check": "npm run lint && npm run build",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:seed": "node prisma/seed.js",
+    "db:studio": "prisma studio --schema prisma/schema.prisma"
   },
   "devDependencies": {
     "eslint": "^9.22.0",
-    "eslint-plugin-react": "^7.37.5"
+    "eslint-plugin-react": "^7.37.5",
+    "prisma": "^5.22.0"
   },
   "engines": {
     "node": ">=22.0.0"
