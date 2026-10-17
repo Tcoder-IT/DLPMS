@@ -1,7 +1,6 @@
 version: "3.9"
 
 services:
-<<<<<<< HEAD
   db:
     image: postgis/postgis:15-3.4
     container_name: dlpms-db
@@ -22,51 +21,3 @@ services:
 
 volumes:
   dlpms-pgdata:
-=======
-  # PostgreSQL with PostGIS
-  db:
-    image: postgis/postgis:15-3.3
-    container_name: dlpms_postgres
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: dlpms
-    ports:
-      - "5432:5432"
-    volumes:
-      - dlpms_pgdata:/var/lib/postgresql/data
-
-  # Backend API
-  backend:
-    build:
-      context: ./backend
-    container_name: dlpms_backend
-    ports:
-      - "5000:5000"
-    env_file:
-      - ./backend/.env
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgrespassword@db:5432/dlpms?schema=public
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
-    depends_on:
-      - db
-    restart: always
-
-  # Frontend Web App
-  frontend:
-    build:
-      context: ./frontend
-    container_name: dlpms_frontend
-    ports:
-      - "3000:80"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    restart: always
-
-volumes:
-  dlpms_pgdata:
->>>>>>> 411a053 (commit all changes)
