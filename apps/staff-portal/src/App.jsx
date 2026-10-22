@@ -8,6 +8,7 @@ import ParcelsAdminPage from './pages/ParcelsAdminPage.jsx';
 import TransfersReviewPage from './pages/TransfersReviewPage.jsx';
 import TransferReviewDetailPage from './pages/TransferReviewDetailPage.jsx';
 import TaxDashboardPage from './pages/TaxDashboardPage.jsx';
+import GisPage from './pages/GisPage.jsx';
 import AuditLogsPage from './pages/AuditLogsPage.jsx';
 import UsersPage from './pages/UsersPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
@@ -27,7 +28,7 @@ export default function App() {
                 <Route path="/transfers" element={<TransfersReviewPage />} />
                 <Route path="/transfers/:id" element={<TransferReviewDetailPage />} />
                 <Route path="/tax" element={<TaxDashboardPage />} />
-                <Route path="/gis" element={<DashboardPage />} />
+                <Route path="/gis" element={<GisPage />} />
                 <Route path="/appointments" element={<DashboardPage />} />
                 <Route path="/audit-logs" element={<AuditLogsPage />} />
                 <Route path="/users" element={<UsersPage />} />

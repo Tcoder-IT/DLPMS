@@ -27,19 +27,40 @@ export default function TransferDetailPage() {
   const { id } = useParams();
   const [transfer, setTransfer] = useState(null);
   const [docs, setDocs] = useState(null);
+  const [myDocuments, setMyDocuments] = useState([]);
+  const [attachForm, setAttachForm] = useState({ documentId: '', documentType: 'sale_agreement' });
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState(null);
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function load() {
-    const [t, d] = await Promise.all([
+    const [t, d, my] = await Promise.all([
       api.get(`/transfers/${id}`).catch((e) => { setError(e); return null; }),
-      api.get(`/transfers/${id}/documents`).catch(() => null)
+      api.get(`/transfers/${id}/documents`).catch(() => null),
+      api.get('/documents?pageSize=100').catch(() => null)
     ]);
     setTransfer(t);
     setDocs(d);
+    if (my) setMyDocuments(my.items);
   }
   useEffect(() => { load(); }, [id]);
+
+  async function handleAttach(e) {
+    e.preventDefault();
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      await api.post(`/transfers/${id}/documents`, attachForm);
+      setAttachForm({ documentId: '', documentType: 'sale_agreement' });
+      await load();
+    } catch (err) {
+      setAttachError(err);
+    } finally {
+      setAttaching(false);
+    }
+  }
 
   async function handleSubmit() {
     setActionError(null);
@@ -129,7 +150,7 @@ export default function TransferDetailPage() {
         <h2 className="font-semibold text-slate-900">Documents</h2>
         {!docs || docs.items.length === 0 ? (
           <EmptyState title="No documents attached yet"
-            description="Upload documents via the documents API, then attach them here." />
+            description="Upload documents via the Documents page, then attach them here." />
         ) : (
           <ul className="mt-3 divide-y divide-slate-100">
             {docs.items.map((d) => (
@@ -149,6 +170,56 @@ export default function TransferDetailPage() {
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Attach document form — shown when the transfer is in any pre-approval state */}
+        {transfer.status !== 'Approved' && transfer.status !== 'Rejected' && transfer.status !== 'Cancelled' && (
+          <form onSubmit={handleAttach} className="mt-4 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+            <h3 className="text-sm font-medium text-slate-700">Attach a document</h3>
+            {attachError && <ErrorBanner error={attachError} onDismiss={() => setAttachError(null)} />}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Document</label>
+                <select
+                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  value={attachForm.documentId}
+                  onChange={(e) => setAttachForm({ ...attachForm, documentId: e.target.value })}
+                  required
+                >
+                  <option value="">Select an uploaded document…</option>
+                  {myDocuments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.originalFilename} ({d.mediaType})
+                    </option>
+                  ))}
+                </select>
+                {myDocuments.length === 0 && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Upload documents on the <Link to="/documents" className="text-blue-700 underline">Documents page</Link> first.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">Document type</label>
+                <select
+                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  value={attachForm.documentType}
+                  onChange={(e) => setAttachForm({ ...attachForm, documentType: e.target.value })}
+                >
+                  <option value="sale_agreement">Sale agreement</option>
+                  <option value="seller_id">Seller ID copy</option>
+                  <option value="buyer_id">Buyer ID copy</option>
+                  <option value="tax_clearance">Tax clearance certificate</option>
+                  <option value="deed">Title deed</option>
+                  <option value="photo">Photo / form</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
+            <Button type="submit" size="sm" disabled={attaching || !attachForm.documentId}>
+              {attaching ? 'Attaching…' : 'Attach'}
+            </Button>
+          </form>
         )}
       </Card>
 

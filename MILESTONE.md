@@ -1,114 +1,128 @@
-# DLPMS Milestone 8 — Frontend integration
+# DLPMS Milestone 9 — Document upload UI + GIS Leaflet map UI
 
-Builds on M7 (the API is fully implemented across 55 endpoints and 7
-sub-systems) by wiring the two React frontends to the API. Both apps
-were M2 placeholders (a Home page + a 404 page); they are now real
-single-page applications with auth, routing, role-aware navigation, and
-real pages that call the API.
+Fills the two biggest UX gaps from M8:
 
-Per `ARCHITECTURE.md` Presentation layer:
-- Citizen React PWA: citizen records, transfer submission, tax/payment
-  experience, appointments, certificates, profile, language selection.
-- Staff React web portal: Land Officer, Tax Official, GIS Officer, and
-  Admin workspaces.
+1. **Citizen PWA** — citizens could not upload documents through the UI.
+   This broke the end-to-end transfer workflow: `transfersService.approveTransfer`
+   (M4) requires all attached documents to have `verificationStatus = 'Verified'`,
+   which required an officer to set, but citizens had no way to upload + attach
+   the documents in the first place. M9 adds a Documents page with multipart
+   upload + an inline "attach to transfer" form on the transfer detail page.
+
+2. **Staff portal** — the GIS sub-system (M4) had `/gis/parcels`,
+   `/gis/parcels/{id}/boundary`, `/gis/parcels/{id}/verify`,
+   `/gis/boundaries/import`, and `/gis/overlaps` endpoints, but no UI.
+   M9 adds a real Leaflet map showing all parcel boundaries as polygons,
+   with click-to-draw, GeoJSON file upload, and a verify button that
+   highlights overlaps.
 
 ## What was added
 
-### Citizen PWA (`apps/citizen-pwa`)
-Now a real SPA with **10 pages** wired to the API:
+### Backend — new `GET /documents` endpoint
+The M6 documents module had `POST /documents`, `GET /documents/{id}`,
+`GET /documents/{id}/content` but **no list endpoint**. M9 adds:
 
-| Page | API endpoints called |
-|---|---|
-| `/login` | `POST /auth/login` |
-| `/register` | `POST /auth/register` |
-| `/` (Dashboard) | `GET /parcels?pageSize=5`, `GET /transfers?pageSize=5`, `GET /notifications/unread` |
-| `/parcels` | `GET /parcels` |
-| `/parcels/:id` | `GET /parcels/{id}`, `GET /parcels/{id}/ownership-history`, `GET /parcels/{id}/tax-records` |
-| `/transfers` | `GET /transfers` |
-| `/transfers/new` | `GET /parcels` (for the parcel picker), `POST /transfers` |
-| `/transfers/:id` | `GET /transfers/{id}`, `GET /transfers/{id}/documents`, `POST /transfers/{id}/submit`, `POST /transfers/{id}/cancel` |
-| `/appointments` | `GET /appointments`, `POST /appointments` |
-| `/certificates` | `GET /certificates/{id}`, `POST /certificates/{id}/download` (blob download) |
-| `/notifications` | `GET /notifications?pageSize=50`, `PATCH /notifications/{id}/read` |
+- `GET /documents` — paginated list. **Citizens see only their own uploads**
+  (per `SECURITY_DESIGN.md` server-side ownership). Staff see all. Each
+  row includes an `attachedTo` array linking to any transfers the
+  document is attached to (with `trackingId`, `transferStatus`,
+  `documentType`, `verificationStatus`).
 
-Infrastructure:
-- `lib/apiClient.js` — fetch-based, JWT access + refresh token storage in
-  localStorage, **one-shot auto-refresh on 401** with retry of the
-  original request, multipart support, error normalization.
-- `lib/format.js` — shared formatters (date, money, transfer status,
-  boundary status).
-- `contexts/AuthContext.jsx` — `<AuthProvider>` + `useAuth()` hook;
-  refreshes the user from `/me` on mount.
-- `components/ui.jsx` — Button (5 variants), Input, Card, Badge, Spinner,
-  EmptyState, ErrorBanner, Field.
-- `components/Layout.jsx` — top bar with logout + nav; mobile-responsive.
-- `components/RouteGuards.jsx` — `<ProtectedRoute>` and
-  `<PublicOnlyRoute>` (redirects to `/` if already logged in).
+The endpoint is documented in the OpenAPI spec — `/api-docs` now
+exposes **56 endpoints** (up from 55 in M8).
 
-The dashboard shows a 4-card stats overview (parcels, transfers, unread
-notifications, certificates) plus recent parcels and transfers lists.
-The transfer detail page renders a visual state-machine stepper for the
-linear path (`Draft → Submitted → TaxVerified → UnderReview → Approved`)
-and surfaces the appropriate contextual message for `TaxHold`,
-`DocumentsRequested`, `Rejected`, `Approved` states.
+### Citizen PWA — Documents page
+`apps/citizen-pwa/src/pages/DocumentsPage.jsx`:
+- Multipart upload form (`<input type="file" accept=".pdf,.png,.jpg,.jpeg">`)
+  that posts to `/documents` via `FormData`. Pre-flight size check
+  (10 MB) before upload. After upload, shows the new document ID so the
+  citizen can copy it for use on the transfer detail page.
+- List of the citizen's uploaded documents with `originalFilename`,
+  `mediaType`, `byteSize`, `uploadedAt`, and `attachedTo` chain showing
+  which transfers each document is attached to and the current
+  verification status (with link to the transfer).
+- Defensive UX note explaining the magic-byte + extension + MIME
+  validation rules.
 
-### Staff portal (`apps/staff-portal`)
-Real SPA with **7 role-aware pages**:
+### Citizen PWA — Transfer detail page attach form
+Extended `apps/citizen-pwa/src/pages/TransferDetailPage.jsx`:
+- Loads the citizen's uploaded documents in parallel with the transfer
+  + attached-documents data.
+- Inline "Attach a document" form (dropdown of the citizen's uploads +
+  document-type dropdown with the seven canonical types: `sale_agreement`,
+  `seller_id`, `buyer_id`, `tax_clearance`, `deed`, `photo`, `other`).
+- Calls `POST /transfers/{id}/documents` (M6).
+- Form is shown only when the transfer is in any pre-approval state —
+  once `Approved` / `Rejected` / `Cancelled`, no further attachments
+  are accepted (the API would reject them with `INVALID_TRANSITION`).
 
-| Page | API endpoints called | Roles |
-|---|---|---|
-| `/login` | `POST /auth/login` | All |
-| `/` (Dashboard) | none — role-aware card links | All |
-| `/parcels` | `GET /parcels?pageSize=50`, `POST /parcels` | LandOfficer, SystemAdmin |
-| `/transfers` | `GET /transfers?pageSize=50` | LandOfficer, SystemAdmin |
-| `/transfers/:id` | `GET /transfers/{id}`, `GET /transfers/{id}/documents`, `POST /transfers/{id}/{request-documents,approve,reject}` | LandOfficer, SystemAdmin |
-| `/tax` | `GET /tax/dashboard`, `GET /tax/arrears` | TaxOfficial, SystemAdmin |
-| `/audit-logs` | `GET /admin/audit-logs`, `GET /admin/audit-logs/export` (blob CSV download) | SystemAdmin |
-| `/users` | `GET /admin/users`, `GET /admin/roles`, `PATCH /admin/users/{id}/role`, `POST /admin/users/{id}/deactivate` | SystemAdmin |
+### Staff portal — GIS page
+`apps/staff-portal/src/pages/GisPage.jsx`:
+- Left column: paginated list of parcels with `parcelNumber`,
+  `subCity`/`kebele`, and a boundary-status badge (`Pending`/`Verified`/
+  `OverlapConflict`/`Rejected`). Vertex count shown for parcels with
+  a stored boundary.
+- Right column: a 400px Leaflet `MapContainer` (OpenStreetMap tiles)
+  centered on Dire Dawa `[9.5915, 41.8629]`. Renders **every** parcel's
+  boundary as a `<Polygon>`:
+  - Selected parcel: bold blue (`#1d4ed8`), 3px weight, 0.15 fill.
+  - Overlapping parcels (post-verify): red (`#dc2626`), 0.25 fill.
+  - Other parcels: grey (`#475569`), 1px weight, 0.08 fill.
+- `Recenter` helper uses `useMap()` + `L.latLngBounds().fitBounds()` to
+  frame the selected parcel's vertices.
+- **Draw-on-map mode**: a `ClickHandler` (uses `useMapEvents({click})`)
+  captures clicks and adds them to `drawPoints`; the in-progress polygon
+  is rendered with a dashed green stroke. Save button converts the
+  `[lat,lng]` points to GeoJSON Polygon `[lng,lat]` coordinates, auto-
+  closes the ring if needed, and PUTs to `/gis/parcels/{id}/boundary`.
+- **GeoJSON file upload**: file input accepts `.json`/`.geojson`,
+  populates a textarea (paste-able), and the upload button POSTs to
+  `/gis/parcels/{id}/boundary` with `{ geometry, expectedVersion }`.
+- **Verify button**: POSTs to `/gis/parcels/{id}/verify`, displays the
+  result with green "Verified" or red "OverlapConflict" + the list of
+  conflicting parcels.
 
-Infrastructure mirrors the citizen PWA (separate localStorage keys so a
-citizen token never bleeds into a staff session). The Layout component
-filters NAV links by `user.role` — a TaxOfficial sees only the Tax card
-+ dashboard; a LandOfficer sees Parcels + Transfers + Appointments; a
-SystemAdmin sees everything.
+The Leaflet CSS is loaded from the unpkg CDN with a Subresource
+Integrity hash in `apps/staff-portal/index.html`.
 
-### Schema / config
-- No schema changes (M8 is purely frontend).
-- Both apps gain the `VITE_API_BASE_URL` env var (defaults to
-  `http://localhost:4000/api/v1`) — set this when deploying behind a
-  proxy.
-- `eslint.config.js` extended with browser globals (`localStorage`,
-  `fetch`, `FormData`, `URL`, `URLSearchParams`, `Blob`, `FileReader`,
-  `window`).
+### Config
+- New dependencies in `apps/staff-portal/package.json`:
+  `leaflet@^1.9.4`, `react-leaflet@^4.2.1` (v4 pinned because v5
+  requires React 19; the project uses React 18.3.1).
+- No schema changes.
+- No new env vars.
 
 ## Verification
 - `npm run lint`: clean (both apps).
-- `npm run build`: green — both Vite apps build (~210 KB / ~205 KB
-  gzipped bundles; up from 164 KB placeholders in M2-M7 because they
-  now include React Router, lucide icons, and ~10 page modules each).
-- Live boot: API + both Vite dev servers running detached via
-  `setsid`. Vite serves the new modules correctly:
-  - `/src/main.jsx` returns the JSX-Runtime-instrumented module
-  - `/src/App.jsx` returns the route tree with HMR
-  - `/src/pages/LoginPage.jsx`, `DashboardPage.jsx`, `UsersPage.jsx`,
-    etc. all return their transformed modules (Vite hot module reload
-    is active)
-- API health check returns 200; OpenAPI spec unchanged at 55 endpoints.
+- `npm run build`: green. Citizen PWA bundle grew to 222 KB / 67 KB
+  gzipped (was 213 / 65 in M8) because of the new Documents page +
+  attach form. Staff portal grew to 370 KB / 112 KB gzipped (was 206 /
+  63) because of Leaflet + react-leaflet + the GIS page (~150 KB of
+  new code including the map renderer).
+- Live boot: API + both Vite dev servers running detached via `setsid`.
+  All three return 200:
+  - `http://localhost:4000/api/v1/health` → 200
+  - `http://localhost:5173/src/pages/DocumentsPage.jsx` → 200 (HMR active)
+  - `http://localhost:5174/src/pages/GisPage.jsx` → 200 (HMR active)
+  - `http://localhost:5174/node_modules/.vite/deps/leaflet.js` → 200
+    (Vite pre-bundled Leaflet correctly)
+- New `GET /documents` endpoint returns 401 cleanly through the auth
+  wall without a token (proves wiring without needing a Postgres
+  backend).
 
 ## What is still intentionally NOT in this milestone
 
-- Real provider adapters (telebirr, SMS, email, certificate signing)
-  remain mocks
-- PostGIS swap (boundary still `Json`) — M7
+- Real provider adapters (telebirr, SMS, email, certificate signing) —
+  still mocks
+- PostGIS swap (boundary still stored as `Json`) — M7 still deferred
 - Public search (`GET /public/parcels/search`) — fields pending
   business/privacy policy per `PROJECT_DECISIONS.md`
 - CIS adapter (production contract pending)
 - Real malware scanning/quarantine (deployment decision)
 - Multi-instance distributed lock for the reminder scheduler
-- Document upload UI (the API supports multipart upload but the citizen
-  PWA does not yet expose an upload form — the `/documents` POST is
-  available for direct API use)
-- GIS boundary map UI (Leaflet) — the API supports boundary upload +
-  verify, but the staff portal does not yet render an interactive map
 - Amharic localization (the schema supports `preferredLanguage = 'am'`
   but the UI is English-only for now)
+- Shapefile import (only GeoJSON is supported in the UI; the API
+  accepts any GeoJSON Polygon regardless of source)
+- Map click-to-edit existing polygon vertices (only draw-new is
+  supported; editing an existing polygon requires re-uploading)

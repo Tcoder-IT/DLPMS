@@ -1,7 +1,7 @@
 // App shell — top bar with logout + nav links, main content area.
 
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, MapPin, ArrowRightLeft, Calendar, FileText, Bell, LogOut, ShieldCheck } from 'lucide-react';
+import { Home, MapPin, ArrowRightLeft, Calendar, FileText, Bell, FolderOpen, LogOut, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { clsx } from 'clsx';
 import { Badge } from './ui.jsx';
@@ -10,6 +10,7 @@ const NAV = [
   { to: '/', label: 'Home', icon: Home },
   { to: '/parcels', label: 'My parcels', icon: MapPin },
   { to: '/transfers', label: 'Transfers', icon: ArrowRightLeft },
+  { to: '/documents', label: 'Documents', icon: FolderOpen },
   { to: '/appointments', label: 'Appointments', icon: Calendar },
   { to: '/certificates', label: 'Certificates', icon: FileText },
   { to: '/notifications', label: 'Notifications', icon: Bell }

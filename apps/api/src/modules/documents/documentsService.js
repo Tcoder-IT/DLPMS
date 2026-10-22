@@ -158,6 +158,57 @@ export async function getDocument({ id, request }) {
   return documentDto(doc, { withStorage: false });
 }
 
+// List documents. Citizens see only their own uploads. Staff see all.
+const listSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+export async function listDocuments({ query, request }) {
+  const parsed = listSchema.safeParse(query);
+  if (!parsed.success) {
+    throw new AppError(400, 'VALIDATION_FAILED', 'Query failed validation.', {
+      issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message }))
+    });
+  }
+  const { page, pageSize } = parsed.data;
+  const roleCode = request.role?.code;
+  // SECURITY_DESIGN.md: server-side ownership. Citizens see only their own uploads.
+  const where = roleCode === RoleCode.Citizen
+    ? { uploadedById: request.user.id }
+    : {};
+  const [items, total] = await Promise.all([
+    db.documentMetadata.findMany({
+      where,
+      orderBy: { uploadedAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: {
+        transferDocuments: {
+          include: { transfer: { select: { id: true, trackingId: true, status: true } } }
+        }
+      }
+    }),
+    db.documentMetadata.count({ where })
+  ]);
+  return {
+    items: items.map((d) => ({
+      ...documentDto(d, { withStorage: false }),
+      attachedTo: d.transferDocuments?.map((td) => ({
+        id: td.id,
+        transferId: td.transferId,
+        trackingId: td.transfer?.trackingId,
+        transferStatus: td.transfer?.status,
+        documentType: td.documentType,
+        verificationStatus: td.verificationStatus
+      })) ?? []
+    })),
+    page,
+    pageSize,
+    total
+  };
+}
+
 export async function streamDocumentContent({ id, request, response }) {
   const doc = await getDocument({ id, request });
   // Audit the download BEFORE streaming so a stream failure does not skip

@@ -617,6 +617,14 @@ export const openapiSpecification = {
       get: { summary: 'List notification templates (SystemAdmin)', responses: { 200: { description: 'Templates list' }, ...errorResponses } }
     },
     '/documents': {
+      get: {
+        summary: 'List documents (Citizens see only their own uploads; Staff see all). Paginated.',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer' } }
+        ],
+        responses: { 200: { description: 'Document list with attachedTo array linking to transfers' }, ...errorResponses }
+      },
       post: {
         summary: 'Upload a supporting document (PDF/PNG/JPEG, max 10MB). Magic-byte + extension + MIME + size validation.',
         description: 'Per SECURITY_DESIGN.md (File and document security): uploads are authenticated and authorized; file type is validated by content inspection, extension, MIME type, size limit, and checksum; executable/unsupported content is rejected; files are stored in private external storage; the database retains controlled metadata only — never a public URL. Every download is server-side authorized at GET /documents/{id}/content.',

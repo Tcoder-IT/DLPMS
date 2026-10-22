@@ -29,6 +29,16 @@ const upload = multer({
   }
 });
 
+// GET /documents — list own uploads (Citizens) / all (Staff). Paginated.
+documentsRouter.get('/', async (request, response, next) => {
+  try {
+    const result = await documentsService.listDocuments({ query: request.query, request });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // POST /documents — upload a single file. Field name: `file`.
 documentsRouter.post('/', (request, response, next) => {
   upload.single('file')(request, response, (err) => {
