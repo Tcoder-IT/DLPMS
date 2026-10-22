@@ -312,6 +312,190 @@ export const openapiSpecification = {
         responses: { 200: { description: 'Ownership chain' } }
       }
     },
+    '/parcels/{id}/tax-records': {
+      get: {
+        summary: 'List tax records for a parcel (Citizens limited to own parcels)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { 200: { description: 'Tax records for the parcel' }, ...errorResponses }
+      }
+    },
+    '/transfers': {
+      get: {
+        summary: 'List transfer requests (Citizens see only their own)',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['Draft', 'Submitted', 'TaxVerified', 'TaxHold', 'UnderReview', 'DocumentsRequested', 'Approved', 'Rejected', 'Cancelled'] } },
+          { name: 'parcelId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+          { name: 'search', in: 'query', schema: { type: 'string' } }
+        ],
+        responses: { 200: { description: 'Transfers list' }, ...errorResponses }
+      },
+      post: {
+        summary: 'Create a draft transfer request (Citizen must be the current owner)',
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['parcelId', 'buyerOwnerId', 'salePrice'],
+                properties: {
+                  parcelId: { type: 'string', format: 'uuid' },
+                  buyerOwnerId: { type: 'string', format: 'uuid' },
+                  buyerSnapshot: { type: 'object' },
+                  salePrice: { type: 'number' }
+                }
+              }
+            }
+          }
+        },
+        responses: { 201: { description: 'Transfer created in Draft state' }, ...errorResponses }
+      }
+    },
+    '/transfers/{id}': {
+      get: { summary: 'Get a transfer request', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Transfer' }, ...errorResponses } }
+    },
+    '/transfers/{id}/submit': {
+      post: {
+        summary: 'Submit a draft transfer for processing (triggers automated tax check)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['expectedVersion'], properties: { expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Transfer submitted' }, ...errorResponses }
+      }
+    },
+    '/transfers/{id}/cancel': {
+      post: {
+        summary: 'Cancel a transfer before final approval (Citizen-seller or officer)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['expectedVersion'], properties: { expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Transfer cancelled' }, ...errorResponses }
+      }
+    },
+    '/transfers/{id}/request-documents': {
+      post: {
+        summary: 'Officer: request additional documents (UnderReview -> DocumentsRequested)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['message', 'expectedVersion'], properties: { message: { type: 'string' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Documents requested' }, ...errorResponses }
+      }
+    },
+    '/transfers/{id}/approve': {
+      post: {
+        summary: 'Officer: approve a transfer (atomically updates ownership + issues certificate + audit)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason', 'expectedVersion'], properties: { reason: { type: 'string' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Transfer approved; ownership transferred; certificate issued' }, ...errorResponses }
+      }
+    },
+    '/transfers/{id}/reject': {
+      post: {
+        summary: 'Officer: reject a transfer with documented reason',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason', 'expectedVersion'], properties: { reason: { type: 'string' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Transfer rejected' }, ...errorResponses }
+      }
+    },
+    '/tax': {
+      get: {
+        summary: 'List tax records (Citizens limited to own parcels)',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer' } },
+          { name: 'parcelId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['Calculated', 'PartiallyPaid', 'Paid', 'Hold', 'Cleared'] } },
+          { name: 'taxYear', in: 'query', schema: { type: 'integer' } }
+        ],
+        responses: { 200: { description: 'Tax records list' }, ...errorResponses }
+      }
+    },
+    '/tax/dashboard': {
+      get: { summary: 'Tax dashboard summary (TaxOfficial/SystemAdmin)', responses: { 200: { description: 'Summary' }, ...errorResponses } }
+    },
+    '/tax/arrears': {
+      get: { summary: 'List parcels with active tax holds (TaxOfficial/SystemAdmin)', responses: { 200: { description: 'Arrears list' }, ...errorResponses } }
+    },
+    '/tax/records/{id}/calculate': {
+      post: {
+        summary: 'Calculate or recalculate tax for a parcel+year (TaxOfficial/SystemAdmin)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['taxYear'], properties: { taxYear: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Tax calculated' }, ...errorResponses }
+      }
+    },
+    '/gis/parcels': {
+      get: {
+        summary: 'List parcels with GIS metadata (GISOfficer/SystemAdmin)',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer' } },
+          { name: 'subCity', in: 'query', schema: { type: 'string' } },
+          { name: 'kebele', in: 'query', schema: { type: 'string' } },
+          { name: 'boundaryStatus', in: 'query', schema: { type: 'string', enum: ['Pending', 'Verified', 'OverlapConflict', 'Rejected'] } }
+        ],
+        responses: { 200: { description: 'GIS parcels list' }, ...errorResponses }
+      }
+    },
+    '/gis/parcels/{id}/boundary': {
+      get: { summary: 'Get the boundary GeoJSON for a parcel', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Boundary' }, ...errorResponses } },
+      put: {
+        summary: 'Upload/replace a parcel boundary GeoJSON Polygon (GISOfficer)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['geometry', 'expectedVersion'], properties: { geometry: { type: 'object', description: 'GeoJSON Polygon' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Boundary stored; status reset to Pending' }, ...errorResponses }
+      }
+    },
+    '/gis/parcels/{id}/verify': {
+      post: {
+        summary: 'Verify a parcel boundary against all other parcel boundaries; sets Verified or OverlapConflict',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { 200: { description: 'Verification result with overlaps list' }, ...errorResponses }
+      }
+    },
+    '/gis/boundaries/import': {
+      post: {
+        summary: 'Bulk import boundaries from a GeoJSON feature collection (GISOfficer)',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['features'], properties: { features: { type: 'array', items: { type: 'object' } } } } } } },
+        responses: { 200: { description: 'Import report' }, ...errorResponses }
+      }
+    },
+    '/gis/overlaps': {
+      get: {
+        summary: 'Scan all parcel boundaries and report pairwise overlaps',
+        parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer' } }],
+        responses: { 200: { description: 'Overlap report' }, ...errorResponses }
+      }
+    },
+    '/payments/initiate': {
+      post: {
+        summary: 'Initiate a mock telebirr payment against a tax record',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['taxRecordId', 'amount'], properties: { taxRecordId: { type: 'string', format: 'uuid' }, amount: { type: 'number' } } } } } },
+        responses: { 202: { description: 'Payment initiated; provider callback URL + signed payload returned for replay' }, ...errorResponses }
+      }
+    },
+    '/payments/{id}': {
+      get: { summary: 'Get a payment transaction', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Payment' }, ...errorResponses } }
+    },
+    '/payments/{id}/refund': {
+      post: {
+        summary: 'Refund a Completed payment (SystemAdmin only). Reverses the linked TaxRecord effects.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Payment refunded' }, ...errorResponses }
+      }
+    },
+    '/webhooks/payments/{provider}': {
+      post: {
+        summary: 'Payment provider callback endpoint (signature-validated, idempotent, replay-protected)',
+        security: [],
+        parameters: [{ name: 'provider', in: 'path', required: true, schema: { type: 'string', enum: ['telebirr'] } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: {
+          200: { description: 'Webhook accepted (idempotent on repeat calls)' },
+          401: { description: 'Invalid signature' },
+          409: { description: 'Replay window expired' }
+        }
+      }
+    },
     '/admin/users': {
       get: { summary: 'List users (SystemAdmin)', responses: { 200: { description: 'User list' } } }
     },

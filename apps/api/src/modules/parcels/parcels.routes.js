@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { RoleCode } from '@prisma/client';
 import * as parcelsService from './parcelsService.js';
+import * as taxService from '../tax/taxService.js';
 
 export const parcelsRouter = Router();
 
@@ -28,6 +29,16 @@ parcelsRouter.get('/:id', async (request, response, next) => {
 parcelsRouter.get('/:id/ownership-history', async (request, response, next) => {
   try {
     const result = await parcelsService.listOwnershipHistory({ id: request.params.id });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Parcel tax records — ownership-checked inside service (Citizen cannot read others' parcels).
+parcelsRouter.get('/:id/tax-records', async (request, response, next) => {
+  try {
+    const result = await taxService.listParcelTaxRecords({ parcelId: request.params.id, request });
     response.json(result);
   } catch (error) {
     next(error);

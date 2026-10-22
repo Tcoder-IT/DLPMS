@@ -28,5 +28,8 @@ export const env = Object.freeze({
   // OTP attempt budget per issued code (SECURITY_DESIGN.md: abuse controls required).
   otpMaxAttempts: Number(process.env.OTP_MAX_ATTEMPTS ?? 5),
   // Optional: when true, OTP is required as a second factor on login.
-  requireOtpOnLogin: process.env.REQUIRE_OTP_ON_LOGIN === 'true'
+  requireOtpOnLogin: process.env.REQUIRE_OTP_ON_LOGIN === 'true',
+  // Webhook signature validation secret (HMAC-SHA256 over the canonical sorted-key
+  // JSON body). MUST be set to a long random value in any non-dev deployment.
+  webhookSecret: process.env.WEBHOOK_SECRET ?? null
 });

@@ -1,132 +1,145 @@
-# DLPMS Milestone 3 — Identity, Audit, Parcels, Admin
+# DLPMS Milestone 4 — Transfers, Tax, GIS, Payments, Webhooks
 
-This milestone extends the M2 foundation with the security, audit, RBAC, and
-core land-registry scaffolding required to support real workflows. It does
-**not** implement transfers, tax/payment, GIS boundary verification, appointments,
-or notifications dispatch — those remain reserved for later milestones per
-the blueprint documents.
+Builds on M3 (identity + RBAC + audit + parcels + admin + audit-read) by adding
+the four sub-systems the PDF Chapter 4 designates as core domain modules:
+Transfers, Tax & Payment, GIS boundary management, and the payment webhook
+ingestion path. Per `AGENTS.md`, all mock/sandbox integrations are behind
+provider-neutral adapters — no live telebirr credentials are required.
 
 ## What was added
 
-### Data layer
-- `prisma/schema.prisma` — full entity catalogue from `DATABASE_DESIGN.md` with
-  `postgresql` provider per `PROJECT_DECISIONS.md`. Boundary geometry is `Json?`
-  pending the PostGIS extension milestone; the production schema will replace
-  `boundaryJson` with `Unsupported("geometry(Polygon,4326)")` plus a GiST index.
-- `prisma/seed.js` — creates the five seeded roles (`Citizen`, `LandOfficer`,
-  `TaxOfficial`, `GISOfficer`, `SystemAdmin`) and a bootstrap `SystemAdmin`
-  user. Safe to re-run.
-- `docker-compose.yml` — local `postgis/postgis:15-3.4` instance for development.
+### Transfers module (`/transfers`)
+Implements the 8-state machine documented in `WORKFLOWS.md §3` and
+`DATABASE_DESIGN.md`:
 
-### Identity & access module
-- `POST /auth/register` — citizen self-registration with phone + password;
-  creates the linked `OwnerProfile`. Generic conflict error to prevent enumeration.
-- `POST /auth/login` — phone/email + password; generic 401 on any failure.
-- `POST /auth/otp/request` and `POST /auth/otp/verify` — OTP behind a mock
-  adapter (`lib/otpProvider.js`). In non-production the dev code is returned
-  for testing only; in production the response is `{delivered: true}` with no code.
-- `POST /auth/token/refresh` — refresh-token rotation. The current refresh JTI is
-  stored on `users.lastRefreshTokenJti`; rotation invalidates the previous JTI.
-- `POST /auth/logout` — clears the refresh JTI so the previous token cannot be
-  used (revocation path).
+```
+Draft ─► Submitted ─► TaxVerified ─► UnderReview ─► Approved (or Rejected)
+                       ▲
+                       └─► TaxHold (if outstanding dues; cleared via /payments)
+                       ▲
+                       └─► DocumentsRequested ◄─► UnderReview
+Cancelled: allowed before final approval
+```
 
-### Authorization & audit middleware
-- `middleware/auth.js` — `requireAuth` verifies HS256 JWT access tokens, loads
-  user + role, attaches `request.user`/`request.role`. Returns a generic 401
-  for any auth failure.
-- `requireRoles(...codes)` — RBAC guard. Applied at the route level on all
-  mutating endpoints. Domain services re-check ownership (see parcels).
-- `middleware/auditMiddleware.js` — `writeAudit(request, action, fields)`
-  helper that creates an `AuditLog` entry with SHA-256 hash chain. Each
-  entry stores `previousHash` (from the latest row's `entryHash`) and computes
-  `entryHash` over the canonical JSON payload. `verifyAuditChain` re-walks
-  the chain and detects tampering. Audit writes are append-only in application
-  code (no UPDATE/DELETE in service modules).
+- `GET /transfers` — paginated list (Citizens see only their own)
+- `POST /transfers` — create Draft (seller must be current owner)
+- `GET /transfers/{id}`
+- `POST /transfers/{id}/submit` (Draft → Submitted; needs `expectedVersion`)
+- `POST /transfers/{id}/cancel` (any non-final state → Cancelled)
+- `POST /transfers/{id}/request-documents` (UnderReview → DocumentsRequested; LandOfficer)
+- `POST /transfers/{id}/approve` (LandOfficer; **ACID transaction**:
+  close prior ownership history row → create new ownership history row →
+  flip `parcels.currentOwnerId` → issue `Certificate` → mark transfer Approved)
+- `POST /transfers/{id}/reject` (LandOfficer; documented reason required)
 
-### Parcels module (`/parcels`)
-- `GET /parcels` — paginated, filterable by sub-city/kebele/owner/search.
-- `GET /parcels/{id}` — includes ownership history and properties.
-- `POST /parcels` — LandOfficer/SystemAdmin create. Wraps parcel + initial
-  ownership history in a Prisma `$transaction` (NFR-06 ACID). Rejects duplicate
-  parcel numbers per `DATABASE_DESIGN.md` business rule.
-- `PATCH /parcels/{id}` — requires `expectedVersion`; stale writes return `409`
-  Conflict (optimistic concurrency, `SECURITY_DESIGN.md`).
-- `GET /parcels/{id}/ownership-history` — chain of past and current owners.
+Approval is gated on: ownership validation, tax clearance (no active `TaxHold`),
+and all transfer documents Verified.
 
-### Profile module (`/me`)
-- `GET /me` — authenticated user + owner profile snapshot.
-- `PATCH /me` — update contact fields and `preferredLanguage`. Bumps the
-  `ownerProfile.version` for optimistic-concurrency support.
+### Tax module (`/tax`, plus `/parcels/{id}/tax-records`)
+Implements `WORKFLOWS.md §4` (tax calculation + payment effects + arrears).
 
-### Admin module (`/admin/*`)
-- `GET /admin/users`, `GET /admin/users/{id}`, `GET /admin/roles` — listing +
-  detail (SystemAdmin only).
-- `PATCH /admin/users/{id}/role` — role assignment with audit write.
-- `POST /admin/users/{id}/deactivate` — sets `active=false` and clears the
-  refresh JTI. Self-deactivation is rejected.
+- `GET /tax` — list tax records (Citizens limited to own parcels)
+- `GET /parcels/{id}/tax-records` — parcel-scoped read (ownership-checked)
+- `POST /tax/records/{id}/calculate` — calculate or recalculate a tax record
+  for a given year using configurable rates from `SystemSetting` (default
+  `0.5 ETB / square meter / year` is lazy-initialized so dev works end-to-end;
+  administrator can override via /admin/settings in a later milestone).
+  AGENTS.md compliance: rates are **not hard-coded business policy**.
+- `GET /tax/dashboard` — summary for the current tax year (TaxOfficial/SystemAdmin)
+- `GET /tax/arrears` — parcels with active tax holds
 
-### Audit module (`/admin/audit-logs`)
-- `GET /admin/audit-logs` — paginated, filterable by actor/action/entity/date.
-- `GET /admin/audit-logs/export` — CSV export (sensitive snapshot fields are
-  excluded; admins fetch individual entries for forensic review).
-- `GET /admin/audit-logs/verify` — recomputes the SHA-256 chain and reports
-  the first broken entry (or `ok: true`).
+### GIS module (`/gis`)
+Implements `WORKFLOWS.md §5` (boundary upload, overlap detection, verification).
+Per `PROJECT_DECISIONS.md`, production uses PostGIS `geometry(Polygon, 4326)`
+with `ST_Intersects`. This milestone stores boundaries as GeoJSON Polygon in
+`LandParcel.boundaryJson` (Json) and runs an in-process overlap detector
+(segment-intersection + point-in-polygon) — sufficient for the prototype; the
+swap to ST_Intersects is a localized change inside `gisService.js`.
 
-### OpenAPI documentation (`NFR-10`)
-- `/api-docs` served by `swagger-ui-express`; spec extended with all new
-  endpoints, security scheme, error response catalog.
+- `GET /gis/parcels` — list parcels with GIS metadata (GISOfficer/SystemAdmin)
+- `GET /gis/parcels/{id}/boundary` — fetch boundary GeoJSON
+- `PUT /gis/parcels/{id}/boundary` — upload/replace boundary (resets status to Pending)
+- `POST /gis/parcels/{id}/verify` — pairwise overlap check vs all other
+  parcels with boundaries; sets `Verified` or `OverlapConflict` and returns the
+  conflicting parcels
+- `POST /gis/boundaries/import` — bulk import from a feature collection
+- `GET /gis/overlaps` — scan all parcel boundaries and report pairwise overlaps
 
-## Security controls implemented
+### Payments module (`/payments`)
+Implements `WORKFLOWS.md §4` (initiate, callback, refund).
+
+- `POST /payments/initiate` — creates a `PaymentTransaction` in `Initiated`
+  state, returns the mock telebirr callback URL + signed webhook payload +
+  signature so the client can immediately replay the callback. (Citizens can
+  only pay for their own parcels.)
+- `GET /payments/{id}` — fetch a payment (Citizens limited to their own)
+- `POST /payments/{id}/refund` — **SystemAdmin only**. Reverses the linked
+  `TaxRecord` effects (paidAmount, creditBalance, holdActive, status) inside
+  an ACID transaction.
+
+### Webhooks module (`/webhooks`)
+Implements `FR-33` (webhook signature validation) and the
+`SECURITY_DESIGN.md` Payment and integration security rules:
+signature-validated, idempotent (by `transactionRef`), replay-protected
+(15-minute window), provider-allowlisted.
+
+- `POST /webhooks/payments/{provider}` — accepts a signed callback. On valid
+  signature and a `Completed` payload, applies the payment to the linked
+  `TaxRecord` (paidAmount, creditBalance, holdActive, status) inside an ACID
+  transaction and writes a `PaymentComplete` audit entry. On `Failed`/`Pending`
+  status, updates the transaction without changing the TaxRecord to Paid. On
+  invalid signature, writes a `WebhookReceived` audit entry with
+  `rejected: INVALID_SIGNATURE` and returns 401. All audit writes on the
+  invalid-signature path are best-effort (do not block the security response
+  if the audit chain is unavailable).
+
+### Mock telebirr adapter
+`apps/api/src/modules/payments/telebirrProvider.js` — provider-neutral adapter.
+Signs webhook payloads with HMAC-SHA256 over the canonical sorted-key JSON
+body. Constant-time signature compare. The mock returns the signed payload to
+the test client so it can replay the callback against
+`/webhooks/payments/telebirr` with header `x-telebirr-signature`.
+
+### Schema additions
+- `AuditAction` enum extended with: `TransferSubmit`, `TransferCancel`,
+  `TaxCalculate`, `PaymentInitiate`, `PaymentComplete`, `PaymentFail`,
+  `WebhookReceived`.
+
+### Env / config
+- `WEBHOOK_SECRET` added to `.env.example` and `env.js`. Must be set to a
+  long random value in any non-dev deployment.
+- `apps/api/src/app.js` mounts 5 new routers under `/api/v1`: `/transfers`,
+  `/tax`, `/gis`, `/payments`, `/webhooks`. Body size limit raised to 256kb
+  to accommodate GeoJSON boundary payloads.
+
+### OpenAPI
+Spec at `/api-docs` now documents **40 endpoints** (up from 19 in M3).
+
+## Security controls reaffirmed
 
 | SECURITY_DESIGN.md rule | Where |
 |---|---|
-| bcrypt cost factor 12 | `utils/security.js` `hashPassword` |
-| JWT 15-min access / 7-day refresh | `utils/security.js` `issueAccessToken` / `issueRefreshToken` |
-| Generic auth failures | `middleware/auth.js` and `identityService.js` |
-| Refresh-token rotation/revocation | `identityService.refresh` and `logout` |
-| RBAC at route + service layer | `requireRoles` + per-service ownership checks |
-| Audit of all CRUD/auth events | `middleware/auditMiddleware.js` |
-| SHA-256 tamper-evident audit chain | `lib/auditLog.js` |
-| Optimistic concurrency (409 Conflict) | `parcelsService.patchParcel` (`expectedVersion`) |
-| ACID transactions for multi-step writes | `parcelsService.createParcel` uses `db.$transaction` |
-| Helmet, rate limiting, request size limit | `app.js` (`helmet`, `express-rate-limit`, `100kb` body) |
-| OTP behind an adapter | `lib/otpProvider.js` (mock) |
+| Webhook signature validation (FR-33) | `webhooksService.js` + `telebirrProvider.js` |
+| Replay protection (15-minute window) | `webhooksService.js` |
+| Idempotent callback processing | `webhooksService.js` (looks up by `transactionRef`) |
+| Refund is admin-only | `paymentsService.refundPayment` (RBAC: SystemAdmin) |
+| ACID transactions for multi-step writes | `transfersService.approveTransfer`, `paymentsService.refundPayment`, `paymentsService.applyCompletedPayment` all use `db.$transaction` |
+| Optimistic concurrency (409 Conflict) | all PATCH/POST mutating endpoints take `expectedVersion` |
+| Tax hold cleared by full payment | `paymentsService.applyCompletedPayment` flips `holdActive` to false when `paidAmount >= calculatedAmount` |
+| Partial payment keeps hold active | same code path — `holdActive` stays true until full |
+| Overpayment becomes credit balance | same code path — surplus recorded in `creditBalance` |
+| Boundary conflict requires officer resolution | `gisService.verifyBoundary` sets `OverlapConflict` and lists conflicts |
 
-## How to run
+## What is still intentionally NOT in this milestone
 
-```bash
-# 1. Copy env and set a strong JWT_SECRET (>=32 chars)
-cp .env.example .env
-
-# 2. Start Postgres/PostGIS
-docker compose up -d db
-
-# 3. Install + generate Prisma client
-npm install
-
-# 4. Apply migrations
-npm --workspace @dlpms/api run prisma:migrate
-
-# 5. Seed roles + bootstrap admin
-npm --workspace @dlpms/api run seed
-
-# 6. Start the API
-npm run dev:api
-```
-
-API: `http://localhost:4000/api/v1`
-Docs: `http://localhost:4000/api-docs`
-
-## What is intentionally NOT in this milestone
-
-- Transfers (`/transfers/*`), tax/payment (`/tax-records`, `/payments/*`)
-- GIS boundary verification (`/gis/*`), PostGIS spatial queries
+- Real telebirr credentials/contract (still mock adapter)
+- Real SMS/email dispatch (`/notifications` endpoints)
 - Appointments (`/appointments`, `/appointment-slots`)
-- Certificates (`/certificates/*`)
-- Document uploads (`/documents/*`)
-- Notifications dispatch (`/notifications`)
+- Certificates download (`/certificates/{id}/download`)
+- Document uploads (`/documents`)
 - CIS adapter (production contract pending)
 - Frontend integration (citizen PWA + staff portal remain M2 placeholders)
+- PostGIS spatial indexes (boundary stored as Json; swap is localized)
 
 These remain governed by the blueprint documents and will be addressed in
 subsequent milestones.

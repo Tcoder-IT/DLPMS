@@ -112,6 +112,13 @@ enum AuditAction {
   Deactivate
   Refund
   BoundaryVerify
+  TransferSubmit
+  TransferCancel
+  TaxCalculate
+  PaymentInitiate
+  PaymentComplete
+  PaymentFail
+  WebhookReceived
 }
 
 // ---------------------------------------------------------------------------

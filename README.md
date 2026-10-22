@@ -11,9 +11,14 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 - `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
 
-## Milestone 3 (current)
+## Milestone 4 (current)
 
-Implements identity, RBAC, audit hash chain, parcels, profile, admin users, and audit-read endpoints. See `MILESTONE.md` for the full scope.
+Builds on M3 by adding the transfers/tax/GIS/payments/webhooks sub-systems per `WORKFLOWS.md` and `API_DESIGN.md`. See `MILESTONE.md` for the full scope.
+
+## Earlier milestones
+
+- **M3** — identity, RBAC, audit hash chain, parcels, profile, admin users, audit-read endpoints.
+- **M2** — initial modular-monolith scaffold.
 
 ## Prerequisites
 
