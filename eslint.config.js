@@ -19,6 +19,7 @@ export default [
       globals: {
         console: 'readonly',
         document: 'readonly',
+        window: 'readonly',
         process: 'readonly',
         Buffer: 'readonly',
         TextEncoder: 'readonly',
@@ -27,7 +28,15 @@ export default [
         setInterval: 'readonly',
         clearInterval: 'readonly',
         setTimeout: 'readonly',
-        clearTimeout: 'readonly'
+        clearTimeout: 'readonly',
+        // Browser globals for the React PWA / staff portal
+        localStorage: 'readonly',
+        fetch: 'readonly',
+        FormData: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        Blob: 'readonly',
+        FileReader: 'readonly'
       }
     },
     plugins: { react },

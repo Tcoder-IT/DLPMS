@@ -1,8 +1,6 @@
 export default function HomePage() {
-  return (
-    <section>
-      <h1 className="text-3xl font-bold">Citizen Service Portal</h1>
-      <p className="mt-4 text-slate-700">Milestone 2 foundation only. Citizen services are not implemented yet.</p>
-    </section>
-  );
+  // Dashboard is now mounted at "/" via App.jsx. This page is unused after
+  // M8 routing changes; kept as a placeholder so the file system stays
+  // stable if any other code imports it.
+  return null;
 }

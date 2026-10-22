@@ -11,12 +11,14 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 - `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
 
-## Milestone 6 (current)
+## Milestone 8 (current)
 
-Builds on M5 by adding the document upload pipeline + transfer-document review workflow per FR-05, FR-12 and `WORKFLOWS.md §7`, with all `SECURITY_DESIGN.md` File and document security rules enforced (magic-byte + extension + MIME + size + checksum validation, executable blocklist, private storage, server-side-authorized downloads). See `MILESTONE.md` for the full scope.
+Wires the two React frontends (citizen PWA + staff portal) to the API. The citizen PWA gains login/register, dashboard, parcels, transfers (with state-machine UI), appointments, certificates (PDF download), and notifications pages. The staff portal gains login, role-aware dashboard, parcels admin, transfer review (with approve/reject/request-documents), tax dashboard, audit logs viewer (with CSV export), and users management. See `MILESTONE.md` for the full scope.
 
 ## Earlier milestones
 
+- **M7** — *(skipped; PostGIS swap deferred)*
+- **M6** — document uploads + transfer-document review.
 - **M5** — appointments, certificates (PDF + QR), notifications + 24h reminders.
 - **M4** — transfers, tax, GIS, payments, webhooks.
 - **M3** — identity, RBAC, audit hash chain, parcels, profile, admin users, audit-read endpoints.
