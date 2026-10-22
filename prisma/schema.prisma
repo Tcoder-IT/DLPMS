@@ -119,6 +119,12 @@ enum AuditAction {
   PaymentComplete
   PaymentFail
   WebhookReceived
+  AppointmentBook
+  AppointmentCancel
+  AppointmentReschedule
+  CertificateIssue
+  CertificateDownload
+  NotificationDispatch
 }
 
 // ---------------------------------------------------------------------------

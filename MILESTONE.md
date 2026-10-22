@@ -1,145 +1,134 @@
-# DLPMS Milestone 4 — Transfers, Tax, GIS, Payments, Webhooks
+# DLPMS Milestone 5 — Appointments, Certificates, Notifications
 
-Builds on M3 (identity + RBAC + audit + parcels + admin + audit-read) by adding
-the four sub-systems the PDF Chapter 4 designates as core domain modules:
-Transfers, Tax & Payment, GIS boundary management, and the payment webhook
-ingestion path. Per `AGENTS.md`, all mock/sandbox integrations are behind
-provider-neutral adapters — no live telebirr credentials are required.
+Builds on M4 (transfers/tax/GIS/payments/webhooks) by adding the three
+remaining sub-systems designated as core domain modules in PDF Chapter 4
+§4.3: the Appointment Scheduler, the Certificate Generator, and the
+Notification Sub-System. Per `AGENTS.md`, all outbound integrations remain
+adapter-based; mock/sandbox providers ship first, with no live credentials.
 
 ## What was added
 
-### Transfers module (`/transfers`)
-Implements the 8-state machine documented in `WORKFLOWS.md §3` and
-`DATABASE_DESIGN.md`:
+### Appointments module (`/appointments` + `/appointment-slots`)
+Implements `WORKFLOWS.md §6` (appointment workflow) and `FR-36` (24-hour
+reminders — handled in the notifications module's scheduler).
 
-```
-Draft ─► Submitted ─► TaxVerified ─► UnderReview ─► Approved (or Rejected)
-                       ▲
-                       └─► TaxHold (if outstanding dues; cleared via /payments)
-                       ▲
-                       └─► DocumentsRequested ◄─► UnderReview
-Cancelled: allowed before final approval
-```
+- `GET /appointments` — paginated list (Citizens see only their own;
+  LandOfficers see only those assigned to them; SystemAdmin sees all)
+- `POST /appointments` — book an appointment (Citizen/SystemAdmin).
+  Real-time double-book recheck using a ±30-minute slot window around
+  the requested time. The citizen must have an `OwnerProfile`. The
+  selected officer must be an active `LandOfficer`. Booking triggers
+  two notifications: an immediate SMS confirmation and a queued 24-hour
+  reminder.
+- `GET /appointments/{id}` — ownership-checked read
+- `PATCH /appointments/{id}` — reschedule (rechecks slot availability;
+  version-protected via `expectedVersion`)
+- `POST /appointments/{id}/cancel` — within a **configurable**
+  cancellation window (default 2 hours, controllable via
+  `SystemSetting` per AGENTS.md "make it configurable; do not assume a
+  duration")
+- `GET /appointment-slots` — list slots (LandOfficer sees own;
+  SystemAdmin sees all)
+- `POST /appointment-slots` — create slots (LandOfficer/SystemAdmin);
+  5–240 minute duration range; unique constraint on
+  `(officerId, startsAt, endsAt)` rejects duplicates
 
-- `GET /transfers` — paginated list (Citizens see only their own)
-- `POST /transfers` — create Draft (seller must be current owner)
-- `GET /transfers/{id}`
-- `POST /transfers/{id}/submit` (Draft → Submitted; needs `expectedVersion`)
-- `POST /transfers/{id}/cancel` (any non-final state → Cancelled)
-- `POST /transfers/{id}/request-documents` (UnderReview → DocumentsRequested; LandOfficer)
-- `POST /transfers/{id}/approve` (LandOfficer; **ACID transaction**:
-  close prior ownership history row → create new ownership history row →
-  flip `parcels.currentOwnerId` → issue `Certificate` → mark transfer Approved)
-- `POST /transfers/{id}/reject` (LandOfficer; documented reason required)
+### Certificates module (`/certificates`)
+Implements `FR-32` (PDF certificate with digital signature + watermark
++ QR code) and `WORKFLOWS.md §8`.
 
-Approval is gated on: ownership validation, tax clearance (no active `TaxHold`),
-and all transfer documents Verified.
+- `GET /certificates/{id}` — fetch metadata (Citizens limited to own)
+- `POST /certificates/{id}/download` — streams a real PDF generated
+  with `pdfkit` + `qrcode`:
+  - Header: "DIRE DAWA LAND ADMINISTRATION — Land Ownership Certificate"
+  - Certificate number, status, issue date
+  - Parcel information block (parcel number, location, declared size, land use)
+  - Registered owner block (full name, national ID, address)
+  - QR code linking to `/api/v1/certificates/{id}` (the verification endpoint)
+  - Diagonal watermark: "PROTOTYPE — NOT LEGALLY BINDING"
+  - Footer disclaimer about pending signing authority per PROJECT_DECISIONS.md
+  - Download is audit-logged before PDF generation so a PDF-generation
+    failure does not skip the audit row.
 
-### Tax module (`/tax`, plus `/parcels/{id}/tax-records`)
-Implements `WORKFLOWS.md §4` (tax calculation + payment effects + arrears).
+Per `PROJECT_DECISIONS.md`, the legal signing authority, key management,
+and QR payload format are unspecified — the prototype is explicit about
+this in the watermark and footer.
 
-- `GET /tax` — list tax records (Citizens limited to own parcels)
-- `GET /parcels/{id}/tax-records` — parcel-scoped read (ownership-checked)
-- `POST /tax/records/{id}/calculate` — calculate or recalculate a tax record
-  for a given year using configurable rates from `SystemSetting` (default
-  `0.5 ETB / square meter / year` is lazy-initialized so dev works end-to-end;
-  administrator can override via /admin/settings in a later milestone).
-  AGENTS.md compliance: rates are **not hard-coded business policy**.
-- `GET /tax/dashboard` — summary for the current tax year (TaxOfficial/SystemAdmin)
-- `GET /tax/arrears` — parcels with active tax holds
+### Notifications module (`/notifications` + admin templates)
+Implements `FR-30` (SMS), `FR-31` (email), and `FR-36` (24-hour reminders).
+Per `SECURITY_DESIGN.md` "CIS, SMS, email, and storage adapters have
+least-privilege credentials" — the prototype ships a mock provider that
+records the `Notification` row and immediately marks it `Sent` (dev) or
+leaves it `Queued` (production simulation).
 
-### GIS module (`/gis`)
-Implements `WORKFLOWS.md §5` (boundary upload, overlap detection, verification).
-Per `PROJECT_DECISIONS.md`, production uses PostGIS `geometry(Polygon, 4326)`
-with `ST_Intersects`. This milestone stores boundaries as GeoJSON Polygon in
-`LandParcel.boundaryJson` (Json) and runs an in-process overlap detector
-(segment-intersection + point-in-polygon) — sufficient for the prototype; the
-swap to ST_Intersects is a localized change inside `gisService.js`.
+- `GET /notifications` — paginated list scoped to `request.user.id`
+- `GET /notifications/unread` — count of `Queued` notifications for the user
+- `PATCH /notifications/{id}/read` — mark as read (recipient-scoped)
+- `GET /admin/notification-templates` — list templates (SystemAdmin).
+  Templates are stored as `SystemSetting` rows keyed
+  `notification.template.{key}` so administrators can edit them
+  without code changes.
 
-- `GET /gis/parcels` — list parcels with GIS metadata (GISOfficer/SystemAdmin)
-- `GET /gis/parcels/{id}/boundary` — fetch boundary GeoJSON
-- `PUT /gis/parcels/{id}/boundary` — upload/replace boundary (resets status to Pending)
-- `POST /gis/parcels/{id}/verify` — pairwise overlap check vs all other
-  parcels with boundaries; sets `Verified` or `OverlapConflict` and returns the
-  conflicting parcels
-- `POST /gis/boundaries/import` — bulk import from a feature collection
-- `GET /gis/overlaps` — scan all parcel boundaries and report pairwise overlaps
+### In-process 24-hour reminder scheduler (FR-36)
+`notificationsService.startReminderScheduler()` runs a 5-minute interval
+that:
+1. Finds `Scheduled` appointments whose `scheduledAt` is 24h ± 5min from now
+2. Looks up the citizen user from the linked `OwnerProfile`
+3. Dispatches a `Queued` `appointment.reminder_24h` notification (idempotent
+   by checking existing notifications for the same `appointmentId`)
 
-### Payments module (`/payments`)
-Implements `WORKFLOWS.md §4` (initiate, callback, refund).
+The timer is `unref()`'d so the process can still exit cleanly. Multi-
+instance deployments need a distributed lock (e.g., `pg_advisory_lock`)
+to avoid duplicate reminders — out of scope for M5.
 
-- `POST /payments/initiate` — creates a `PaymentTransaction` in `Initiated`
-  state, returns the mock telebirr callback URL + signed webhook payload +
-  signature so the client can immediately replay the callback. (Citizens can
-  only pay for their own parcels.)
-- `GET /payments/{id}` — fetch a payment (Citizens limited to their own)
-- `POST /payments/{id}/refund` — **SystemAdmin only**. Reverses the linked
-  `TaxRecord` effects (paidAmount, creditBalance, holdActive, status) inside
-  an ACID transaction.
-
-### Webhooks module (`/webhooks`)
-Implements `FR-33` (webhook signature validation) and the
-`SECURITY_DESIGN.md` Payment and integration security rules:
-signature-validated, idempotent (by `transactionRef`), replay-protected
-(15-minute window), provider-allowlisted.
-
-- `POST /webhooks/payments/{provider}` — accepts a signed callback. On valid
-  signature and a `Completed` payload, applies the payment to the linked
-  `TaxRecord` (paidAmount, creditBalance, holdActive, status) inside an ACID
-  transaction and writes a `PaymentComplete` audit entry. On `Failed`/`Pending`
-  status, updates the transaction without changing the TaxRecord to Paid. On
-  invalid signature, writes a `WebhookReceived` audit entry with
-  `rejected: INVALID_SIGNATURE` and returns 401. All audit writes on the
-  invalid-signature path are best-effort (do not block the security response
-  if the audit chain is unavailable).
-
-### Mock telebirr adapter
-`apps/api/src/modules/payments/telebirrProvider.js` — provider-neutral adapter.
-Signs webhook payloads with HMAC-SHA256 over the canonical sorted-key JSON
-body. Constant-time signature compare. The mock returns the signed payload to
-the test client so it can replay the callback against
-`/webhooks/payments/telebirr` with header `x-telebirr-signature`.
+### Cross-module wiring (best-effort notification dispatch)
+- `transfersService.approveTransfer` — after the ACID ownership transfer,
+  dispatches an SMS to the seller and a separate SMS to the buyer
+  (per `WORKFLOWS.md §3 step 7` "produces certificate, sends
+  notification"). Failures are logged but do not fail the transfer.
+- `appointmentsService.bookAppointment` — dispatches the immediate
+  confirmation SMS and queues the 24-hour reminder.
 
 ### Schema additions
-- `AuditAction` enum extended with: `TransferSubmit`, `TransferCancel`,
-  `TaxCalculate`, `PaymentInitiate`, `PaymentComplete`, `PaymentFail`,
-  `WebhookReceived`.
+- `AuditAction` enum extended with: `AppointmentBook`,
+  `AppointmentCancel`, `AppointmentReschedule`, `CertificateIssue`,
+  `CertificateDownload`, `NotificationDispatch`.
 
 ### Env / config
-- `WEBHOOK_SECRET` added to `.env.example` and `env.js`. Must be set to a
-  long random value in any non-dev deployment.
-- `apps/api/src/app.js` mounts 5 new routers under `/api/v1`: `/transfers`,
-  `/tax`, `/gis`, `/payments`, `/webhooks`. Body size limit raised to 256kb
-  to accommodate GeoJSON boundary payloads.
+- `PUBLIC_BASE_URL` added to `.env.example` and `env.js` — used to build
+  the QR-code verification URL embedded in certificate PDFs.
+- `apps/api/src/app.js` mounts 3 new routers under `/api/v1`:
+  `/appointments`, `/appointment-slots`, `/certificates`,
+  `/notifications`, and `/admin/notification-templates`.
+- The reminder scheduler is started on boot unless `NODE_ENV=production`
+  and `ENABLE_SCHEDULER != 'true'`.
 
 ### OpenAPI
-Spec at `/api-docs` now documents **40 endpoints** (up from 19 in M3).
+Spec at `/api-docs` now documents **50 endpoints** (up from 40 in M4,
+19 in M3, 1 in M2).
 
 ## Security controls reaffirmed
 
 | SECURITY_DESIGN.md rule | Where |
 |---|---|
-| Webhook signature validation (FR-33) | `webhooksService.js` + `telebirrProvider.js` |
-| Replay protection (15-minute window) | `webhooksService.js` |
-| Idempotent callback processing | `webhooksService.js` (looks up by `transactionRef`) |
-| Refund is admin-only | `paymentsService.refundPayment` (RBAC: SystemAdmin) |
-| ACID transactions for multi-step writes | `transfersService.approveTransfer`, `paymentsService.refundPayment`, `paymentsService.applyCompletedPayment` all use `db.$transaction` |
-| Optimistic concurrency (409 Conflict) | all PATCH/POST mutating endpoints take `expectedVersion` |
-| Tax hold cleared by full payment | `paymentsService.applyCompletedPayment` flips `holdActive` to false when `paidAmount >= calculatedAmount` |
-| Partial payment keeps hold active | same code path — `holdActive` stays true until full |
-| Overpayment becomes credit balance | same code path — surplus recorded in `creditBalance` |
-| Boundary conflict requires officer resolution | `gisService.verifyBoundary` sets `OverlapConflict` and lists conflicts |
+| Server-side ownership for citizen resources | appointments, certificates, notifications all check `request.user.ownerProfile.id` or `request.user.id` |
+| Configurable, not hard-coded business policy | `appointment.cancellation_window_hours` is a `SystemSetting`; AGENTS.md compliance |
+| Real-time slot availability recheck | `bookAppointment` and `rescheduleAppointment` both query for conflicting slots at the moment of mutation |
+| Optimistic concurrency (409 Conflict) | all PATCH endpoints take `expectedVersion` |
+| Audit logging of privileged actions | certificate download is audit-logged before PDF generation |
+| Notifications behind an adapter | mock provider in `notificationsService.dispatchNotification` — swappable for real Africa's Talking/Twilio/email |
+| Background scheduling remains inside the monolith | `setInterval`-based in-process scheduler (PDF §4.8) |
+| Idempotent notification dispatch | reminder scheduler checks for existing notifications before dispatching |
 
 ## What is still intentionally NOT in this milestone
 
-- Real telebirr credentials/contract (still mock adapter)
-- Real SMS/email dispatch (`/notifications` endpoints)
-- Appointments (`/appointments`, `/appointment-slots`)
-- Certificates download (`/certificates/{id}/download`)
-- Document uploads (`/documents`)
+- Real SMS/email provider credentials (still mock)
+- Real certificate signing authority (watermark is explicit about this)
+- Document uploads (`/documents`) — still deferred
 - CIS adapter (production contract pending)
 - Frontend integration (citizen PWA + staff portal remain M2 placeholders)
-- PostGIS spatial indexes (boundary stored as Json; swap is localized)
+- PostGIS spatial indexes (still `Json` for boundaries)
+- Multi-instance distributed lock for the reminder scheduler
 
 These remain governed by the blueprint documents and will be addressed in
 subsequent milestones.

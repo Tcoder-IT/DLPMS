@@ -31,5 +31,8 @@ export const env = Object.freeze({
   requireOtpOnLogin: process.env.REQUIRE_OTP_ON_LOGIN === 'true',
   // Webhook signature validation secret (HMAC-SHA256 over the canonical sorted-key
   // JSON body). MUST be set to a long random value in any non-dev deployment.
-  webhookSecret: process.env.WEBHOOK_SECRET ?? null
+  webhookSecret: process.env.WEBHOOK_SECRET ?? null,
+  // Public base URL used to build the QR-code verification URL embedded in
+  // certificate PDFs. In production this is the externally reachable API URL.
+  publicBaseUrl: process.env.PUBLIC_BASE_URL ?? 'http://localhost:4000'
 });

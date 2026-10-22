@@ -496,6 +496,126 @@ export const openapiSpecification = {
         }
       }
     },
+    '/appointments': {
+      get: {
+        summary: 'List appointments (Citizens see only their own; LandOfficers see assigned)',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['Scheduled', 'Completed', 'Cancelled', 'NoShow'] } },
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'officerId', in: 'query', schema: { type: 'string', format: 'uuid' } }
+        ],
+        responses: { 200: { description: 'Appointments list' }, ...errorResponses }
+      },
+      post: {
+        summary: 'Book an appointment (Citizen/SystemAdmin). Real-time slot availability check at booking time.',
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['officerId', 'serviceType', 'scheduledAt'],
+                properties: {
+                  officerId: { type: 'string', format: 'uuid' },
+                  slotId: { type: 'string', format: 'uuid' },
+                  serviceType: { type: 'string' },
+                  scheduledAt: { type: 'string', format: 'date-time' },
+                  purpose: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: { 201: { description: 'Appointment booked; SMS confirmation dispatched; 24h reminder scheduled' }, ...errorResponses }
+      }
+    },
+    '/appointments/{id}': {
+      get: { summary: 'Get an appointment (ownership-checked)', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Appointment' }, ...errorResponses } },
+      patch: {
+        summary: 'Reschedule an appointment (ownership-checked; configurable cancellation window applies to status transitions)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['newScheduledAt', 'expectedVersion'], properties: { newScheduledAt: { type: 'string', format: 'date-time' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Appointment rescheduled' }, ...errorResponses }
+      }
+    },
+    '/appointments/{id}/cancel': {
+      post: {
+        summary: 'Cancel an appointment (configurable cancellation window; default 2h)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason', 'expectedVersion'], properties: { reason: { type: 'string' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Appointment cancelled' }, ...errorResponses }
+      }
+    },
+    '/appointment-slots': {
+      get: {
+        summary: 'List appointment slots (LandOfficer sees only own; SystemAdmin sees all)',
+        parameters: [
+          { name: 'officerId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'active', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } }
+        ],
+        responses: { 200: { description: 'Slots list' }, ...errorResponses }
+      },
+      post: {
+        summary: 'Create an appointment slot (LandOfficer/SystemAdmin)',
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['officerId', 'serviceType', 'startsAt', 'endsAt'],
+                properties: {
+                  officerId: { type: 'string', format: 'uuid' },
+                  serviceType: { type: 'string' },
+                  startsAt: { type: 'string', format: 'date-time' },
+                  endsAt: { type: 'string', format: 'date-time' },
+                  capacity: { type: 'integer', default: 1 }
+                }
+              }
+            }
+          }
+        },
+        responses: { 201: { description: 'Slot created' }, ...errorResponses }
+      }
+    },
+    '/certificates/{id}': {
+      get: { summary: 'Get a certificate (ownership-checked)', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Certificate' }, ...errorResponses } }
+    },
+    '/certificates/{id}/download': {
+      post: {
+        summary: 'Download the certificate PDF (watermarked + QR code; ownership-checked; audit-logged).',
+        description: 'Per FR-32, the PDF is digitally-signed/watermarked/QR-enabled. PROJECT_DECISIONS.md: signature authority is unspecified, so the prototype watermark is explicit about not being legally binding.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          200: { description: 'PDF file', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } },
+          ...errorResponses
+        }
+      }
+    },
+    '/notifications': {
+      get: {
+        summary: 'List my notifications (recipient-scoped)',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['Queued', 'Sent', 'Failed', 'Suppressed'] } },
+          { name: 'channel', in: 'query', schema: { type: 'string', enum: ['sms', 'email'] } }
+        ],
+        responses: { 200: { description: 'Notifications list' }, ...errorResponses }
+      }
+    },
+    '/notifications/unread': {
+      get: { summary: 'Count my unread notifications', responses: { 200: { description: 'Count' }, ...errorResponses } }
+    },
+    '/notifications/{id}/read': {
+      patch: { summary: 'Mark a notification as read (recipient-scoped)', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Marked read' }, ...errorResponses } }
+    },
+    '/admin/notification-templates': {
+      get: { summary: 'List notification templates (SystemAdmin)', responses: { 200: { description: 'Templates list' }, ...errorResponses } }
+    },
     '/admin/users': {
       get: { summary: 'List users (SystemAdmin)', responses: { 200: { description: 'User list' } } }
     },

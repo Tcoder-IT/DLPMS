@@ -29,6 +29,7 @@ import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
 import { writeAudit } from '../../middleware/auditMiddleware.js';
 import { AuditAction, TransferStatus } from '@prisma/client';
+import { dispatchNotification } from '../notifications/notificationsService.js';
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -386,6 +387,39 @@ export async function approveTransfer({ id, input, request }) {
     oldSnapshot: { status: transfer.status, currentOwnerId: transfer.parcel.currentOwnerId },
     newSnapshot: { status: 'Approved', currentOwnerId: transfer.buyerOwnerId, certificateNumber }
   });
+
+  // WORKFLOWS.md §3 step 7: "produces certificate, sends notification".
+  // Best-effort: notifications must not fail the approval transaction.
+  try {
+    const sellerUser = await db.ownerProfile.findUnique({
+      where: { id: transfer.sellerOwnerId },
+      select: { userId: true }
+    });
+    const buyerUser = await db.ownerProfile.findUnique({
+      where: { id: transfer.buyerOwnerId },
+      select: { userId: true }
+    });
+    if (sellerUser?.userId) {
+      await dispatchNotification({
+        recipientUserId: sellerUser.userId,
+        channel: 'sms',
+        templateKey: 'transfer.approved_seller',
+        payload: { transferId: transfer.id, trackingId: transfer.trackingId, parcelId: transfer.parcelId },
+        scheduledAt: new Date()
+      });
+    }
+    if (buyerUser?.userId) {
+      await dispatchNotification({
+        recipientUserId: buyerUser.userId,
+        channel: 'sms',
+        templateKey: 'transfer.approved_buyer',
+        payload: { transferId: transfer.id, trackingId: transfer.trackingId, certificateNumber },
+        scheduledAt: new Date()
+      });
+    }
+  } catch (error) {
+    console.error({ event: 'transfer_notification_failed', transferId: transfer.id, error: error.message });
+  }
 
   return transferDto(updated.transfer, { withCertificate: { certificateNumber } });
 }

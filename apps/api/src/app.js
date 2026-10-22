@@ -19,6 +19,10 @@ import { taxRouter } from './modules/tax/tax.routes.js';
 import { gisRouter } from './modules/gis/gis.routes.js';
 import { paymentsRouter } from './modules/payments/payments.routes.js';
 import { webhooksRouter } from './modules/webhooks/webhooks.routes.js';
+import { appointmentsRouter, appointmentSlotsRouter } from './modules/appointments/appointments.routes.js';
+import { certificatesRouter } from './modules/certificates/certificates.routes.js';
+import { notificationsRouter, notificationTemplatesRouter } from './modules/notifications/notifications.routes.js';
+import { startReminderScheduler } from './modules/notifications/notificationsService.js';
 
 export function createApp() {
   const app = express();
@@ -49,8 +53,13 @@ export function createApp() {
   app.use('/api/v1/tax', taxRouter);
   app.use('/api/v1/gis', gisRouter);
   app.use('/api/v1/payments', paymentsRouter);
+  app.use('/api/v1/appointments', appointmentsRouter);
+  app.use('/api/v1/appointment-slots', appointmentSlotsRouter);
+  app.use('/api/v1/certificates', certificatesRouter);
+  app.use('/api/v1/notifications', notificationsRouter);
   app.use('/api/v1/admin', adminUsersRouter);
   app.use('/api/v1/admin', auditRouter);
+  app.use('/api/v1/admin', notificationTemplatesRouter); // /api/v1/admin/notification-templates
 
   // Provider webhooks — separate from user-facing routes; signature-validated.
   app.use('/api/v1/webhooks', webhooksRouter);
@@ -59,4 +68,11 @@ export function createApp() {
   app.use(errorHandler);
 
   return app;
+}
+
+// Start the in-process 24-hour appointment reminder scheduler. The timer is
+// unref'd so the process can still exit cleanly. Multi-instance deployments
+// need a distributed lock — see notificationsService.startReminderScheduler.
+if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SCHEDULER === 'true') {
+  startReminderScheduler();
 }

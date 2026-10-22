@@ -23,7 +23,11 @@ export default [
         Buffer: 'readonly',
         TextEncoder: 'readonly',
         TextDecoder: 'readonly',
-        globalThis: 'readonly'
+        globalThis: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly'
       }
     },
     plugins: { react },
