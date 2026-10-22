@@ -60,6 +60,16 @@ export async function initiatePayment({ input, request }) {
   }
 
   const transactionRef = issueTransactionReference();
+  // PDF §4.5.2: "When a citizen initiates a tax payment, the transaction
+  // enters the Initiated state and a payment request is sent to the
+  // telebirr Payment Gateway. The transaction then transitions to
+  // Pending, where the system waits for the citizen to complete the
+  // payment on their mobile device."
+  //
+  // For the mock provider, both transitions happen at once because the
+  // "request" to telebirr is synchronous (we just record the signed
+  // webhook payload for the client to replay). We record both states in
+  // the audit log; the visible DB status is Pending.
   const payment = await db.paymentTransaction.create({
     data: {
       taxRecordId: taxRecord.id,
@@ -67,15 +77,14 @@ export async function initiatePayment({ input, request }) {
       transactionRef,
       amount,
       method: PaymentMethod.OnlineTelebirr,
-      status: PaymentStatus.Initiated,
+      status: PaymentStatus.Pending,
       providerRef: `${getProviderName()}-${transactionRef}`
     }
   });
-
   await writeAudit(request, AuditAction.PaymentInitiate, {
     entityType: 'PaymentTransaction',
     entityId: payment.id,
-    newSnapshot: { transactionRef, amount, taxRecordId, method: 'OnlineTelebirr' }
+    newSnapshot: { transactionRef, amount, taxRecordId, method: 'OnlineTelebirr', status: 'Initiated → Pending' }
   });
 
   // Mock provider: return a webhook payload + signature so the client can
@@ -205,8 +214,9 @@ export async function applyCompletedPayment({ payment, taxRecordId, providerRef,
     });
   });
   // The webhook path is unauthenticated; build a synthetic request shape for audit.
+  const syntheticRequest = { id: requestId ?? null, user: { id: null }, get: () => null, socket: { remoteAddress: null } };
   await writeAudit(
-    { id: requestId ?? null, user: { id: null }, get: () => null, socket: { remoteAddress: null } },
+    syntheticRequest,
     AuditAction.PaymentComplete,
     {
       entityType: 'PaymentTransaction',
@@ -214,6 +224,47 @@ export async function applyCompletedPayment({ payment, taxRecordId, providerRef,
       newSnapshot: { status: 'Completed', taxRecordId }
     }
   );
+
+  // PDF §4.5.1 Table 24: "Tax Hold → Submitted: Citizen pays outstanding
+  // tax; tax check re-run automatically." The payment just cleared the tax
+  // hold (if fully paid); find any TaxHold transfers on this parcel and
+  // re-run the tax check on them so they auto-advance.
+  try {
+    const { runAutomatedTaxCheck } = await import('../transfers/transfersService.js');
+    const taxRecord = await db.taxRecord.findUnique({
+      where: { id: taxRecordId },
+      select: { parcelId: true, holdActive: true }
+    });
+    if (taxRecord && !taxRecord.holdActive) {
+      const heldTransfers = await db.transferRequest.findMany({
+        where: { parcelId: taxRecord.parcelId, status: 'TaxHold' }
+      });
+      for (const t of heldTransfers) {
+        // Transition TaxHold → Submitted (re-run tax check) per the state chart.
+        await db.transferRequest.update({
+          where: { id: t.id },
+          data: { status: 'Submitted', version: { increment: 1 } }
+        });
+        await writeAudit(syntheticRequest, AuditAction.Update, {
+          entityType: 'TransferRequest',
+          entityId: t.id,
+          oldSnapshot: { status: 'TaxHold' },
+          newSnapshot: { status: 'Submitted', reason: 'Tax hold cleared by payment; re-running tax check' }
+        });
+        // Run the tax check (will now transition to TaxVerified → UnderReview).
+        await runAutomatedTaxCheck({
+          transfer: { ...t, status: 'Submitted', parcelId: taxRecord.parcelId },
+          request: syntheticRequest
+        });
+      }
+    }
+  } catch (error) {
+    // Best-effort: payment success must not fail because of a transfer
+    // auto-advance error. The hold is cleared; the citizen/officer can
+    // manually re-trigger the tax check by re-submitting the transfer.
+    console.error({ event: 'transfer_auto_advance_failed', taxRecordId, paymentId: payment.id, error: error.message });
+  }
+
   return { payment: paymentDto(updated), alreadyApplied: false };
 }
 
@@ -236,4 +287,80 @@ function paymentDto(payment, opts = {}) {
       ? { taxRecord: { id: payment.taxRecord.id, taxYear: payment.taxRecord.taxYear, calculatedAmount: payment.taxRecord.calculatedAmount } }
       : {})
   };
+}
+
+// ---------------------------------------------------------------------------
+// Payment 15-min timeout sweeper — PDF §4.5.2: "If no webhook callback is
+// received within 15 minutes, the transaction times out and is also marked
+// as Failed." Runs on the same setInterval pattern as the appointment
+// reminder scheduler. Multi-instance deployments need a distributed lock.
+// ---------------------------------------------------------------------------
+
+const PAYMENT_TIMEOUT_INTERVAL_MS = 5 * 60 * 1000; // run every 5 min
+const PAYMENT_TIMEOUT_WINDOW_MS = 15 * 60 * 1000;   // 15-min PDF rule
+
+let paymentTimer = null;
+
+export function startPaymentTimeoutScheduler() {
+  if (paymentTimer) return paymentTimer;
+  paymentTimer = setInterval(runPaymentTimeoutCycle, PAYMENT_TIMEOUT_INTERVAL_MS);
+  paymentTimer.unref?.();
+  return paymentTimer;
+}
+
+export function stopPaymentTimeoutScheduler() {
+  if (paymentTimer) {
+    clearInterval(paymentTimer);
+    paymentTimer = null;
+  }
+}
+
+async function runPaymentTimeoutCycle() {
+  try {
+    const cutoff = new Date(Date.now() - PAYMENT_TIMEOUT_WINDOW_MS);
+    // Any Pending or Processing payment older than 15 min from now is timed out.
+    const stale = await db.paymentTransaction.findMany({
+      where: {
+        status: { in: [PaymentStatus.Pending, PaymentStatus.Processing, PaymentStatus.Initiated] },
+        initiatedAt: { lt: cutoff }
+      }
+    });
+    for (const p of stale) {
+      await db.paymentTransaction.update({
+        where: { id: p.id },
+        data: { status: PaymentStatus.Failed, version: { increment: 1 } }
+      });
+      const syntheticRequest = { id: null, user: { id: null }, get: () => null, socket: { remoteAddress: null } };
+      await writeAudit(syntheticRequest, AuditAction.PaymentFail, {
+        entityType: 'PaymentTransaction',
+        entityId: p.id,
+        oldSnapshot: { status: p.status },
+        newSnapshot: { status: 'Failed', reason: 'Webhook timeout (15 min)' }
+      });
+      // PDF §4.5.2: "the system administrator is notified for manual
+      // investigation." Dispatch a notification to the admin via the
+      // notification queue (best-effort).
+      try {
+        const { dispatchNotification } = await import('../notifications/notificationsService.js');
+        // Look up a SystemAdmin to notify.
+        const admin = await db.user.findFirst({
+          where: { role: { code: 'SystemAdmin' }, active: true },
+          select: { id: true }
+        });
+        if (admin) {
+          await dispatchNotification({
+            recipientUserId: admin.id,
+            channel: 'email',
+            templateKey: 'payment.timeout_investigation',
+            payload: { paymentId: p.id, transactionRef: p.transactionRef, initiatedAt: p.initiatedAt.toISOString() },
+            scheduledAt: new Date()
+          });
+        }
+      } catch (error) {
+        console.error({ event: 'payment_timeout_notification_failed', paymentId: p.id, error: error.message });
+      }
+    }
+  } catch (error) {
+    console.error({ event: 'payment_timeout_scheduler_failed', error: error.message });
+  }
 }

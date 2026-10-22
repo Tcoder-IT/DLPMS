@@ -25,6 +25,7 @@ import { notificationsRouter, notificationTemplatesRouter } from './modules/noti
 import { documentsRouter } from './modules/documents/documents.routes.js';
 import { transferDocumentsRouter } from './modules/transfers/transfers.routes.js';
 import { startReminderScheduler } from './modules/notifications/notificationsService.js';
+import { startPaymentTimeoutScheduler } from './modules/payments/paymentsService.js';
 
 export function createApp() {
   const app = express();
@@ -79,4 +80,6 @@ export function createApp() {
 // need a distributed lock — see notificationsService.startReminderScheduler.
 if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SCHEDULER === 'true') {
   startReminderScheduler();
+  // PDF §4.5.2: 15-min payment webhook timeout sweeper.
+  startPaymentTimeoutScheduler();
 }

@@ -5,10 +5,12 @@ import { ProtectedRoute, PublicOnlyRoute } from './components/RouteGuards.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
 import ParcelsAdminPage from './pages/ParcelsAdminPage.jsx';
+import ParcelDetailStaffPage from './pages/ParcelDetailStaffPage.jsx';
 import TransfersReviewPage from './pages/TransfersReviewPage.jsx';
 import TransferReviewDetailPage from './pages/TransferReviewDetailPage.jsx';
 import TaxDashboardPage from './pages/TaxDashboardPage.jsx';
 import GisPage from './pages/GisPage.jsx';
+import AppointmentsStaffPage from './pages/AppointmentsStaffPage.jsx';
 import AuditLogsPage from './pages/AuditLogsPage.jsx';
 import UsersPage from './pages/UsersPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
@@ -24,12 +26,12 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/parcels" element={<ParcelsAdminPage />} />
-                <Route path="/parcels/:id" element={<ParcelsAdminPage />} />
+                <Route path="/parcels/:id" element={<ParcelDetailStaffPage />} />
                 <Route path="/transfers" element={<TransfersReviewPage />} />
                 <Route path="/transfers/:id" element={<TransferReviewDetailPage />} />
                 <Route path="/tax" element={<TaxDashboardPage />} />
                 <Route path="/gis" element={<GisPage />} />
-                <Route path="/appointments" element={<DashboardPage />} />
+                <Route path="/appointments" element={<AppointmentsStaffPage />} />
                 <Route path="/audit-logs" element={<AuditLogsPage />} />
                 <Route path="/users" element={<UsersPage />} />
                 <Route path="*" element={<NotFoundPage />} />

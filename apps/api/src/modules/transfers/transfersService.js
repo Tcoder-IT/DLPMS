@@ -63,12 +63,27 @@ const expectedVersionSchema = z.object({
   expectedVersion: z.number().int().positive()
 });
 
-// Allowed transitions per WORKFLOWS.md §3.
+// Allowed transitions per PDF §4.5.1 State Chart Table 24:
+//   Draft → Submitted (citizen submits)
+//   Submitted → TaxVerified (auto tax check: no dues)
+//   Submitted → TaxHold (auto tax check: outstanding dues; citizen notified)
+//   TaxHold → Submitted (citizen pays; tax check re-runs automatically)
+//   TaxVerified → UnderReview (assigned to a Land Officer)
+//   UnderReview → DocumentsRequested (officer needs more docs)
+//   DocumentsRequested → UnderReview (citizen uploads more; review resumes)
+//   UnderReview → Approved (officer verifies all docs)
+//   UnderReview → Rejected (officer rejects with documented reasons)
+//   Approved / Rejected → [Terminal]
+//   Any active state → Cancelled (citizen cancels before final approval)
+//
+// The crucial difference from the M4 implementation: TaxHold goes back to
+// Submitted (re-run tax check), NOT directly to TaxVerified. The re-check
+// loop is what makes the "citizen pays → transfer auto-advances" path work.
 const ALLOWED_TRANSITIONS = {
   [TransferStatus.Draft]: [TransferStatus.Submitted, TransferStatus.Cancelled],
   [TransferStatus.Submitted]: [TransferStatus.TaxVerified, TransferStatus.TaxHold, TransferStatus.Cancelled],
   [TransferStatus.TaxVerified]: [TransferStatus.UnderReview, TransferStatus.Cancelled],
-  [TransferStatus.TaxHold]: [TransferStatus.TaxVerified, TransferStatus.Cancelled],
+  [TransferStatus.TaxHold]: [TransferStatus.Submitted, TransferStatus.Cancelled],
   [TransferStatus.UnderReview]: [TransferStatus.DocumentsRequested, TransferStatus.Approved, TransferStatus.Rejected, TransferStatus.Cancelled],
   [TransferStatus.DocumentsRequested]: [TransferStatus.UnderReview, TransferStatus.Approved, TransferStatus.Rejected, TransferStatus.Cancelled],
   [TransferStatus.Approved]: [],
@@ -81,6 +96,91 @@ function assertTransition(from, to) {
   if (!allowed.includes(to)) {
     throw new AppError(409, 'INVALID_TRANSITION', `Cannot transition transfer from ${from} to ${to}.`);
   }
+}
+
+// Auto-tax-check per PDF §4.5.1: when a transfer is in Submitted state,
+// the system queries the TaxRecord for outstanding dues on the parcel.
+// If hold is active → transition to TaxHold + notify citizen.
+// If no hold → transition to TaxVerified, then immediately to UnderReview
+// (auto-assignment; a LandOfficer picks it up later via the review queue).
+//
+// PDF Table 24: "Tax Verified → Under Review: Request assigned to a Land
+// Officer for manual verification." For the prototype, we auto-advance to
+// UnderReview because there's no officer work-queue assignment algorithm
+// yet — the first available LandOfficer can self-assign by reviewing it.
+// The audit log records the transition; the assignedOfficerId stays null
+// until an officer opens the review.
+export async function runAutomatedTaxCheck({ transfer, request }) {
+  const parcel = await db.landParcel.findUnique({
+    where: { id: transfer.parcelId },
+    select: { id: true, currentOwnerId: true }
+  });
+  if (!parcel) {
+    throw new AppError(404, 'NOT_FOUND', 'Parcel for this transfer no longer exists.');
+  }
+  // Look for an active tax hold on the parcel (any tax year).
+  const holdRecord = await db.taxRecord.findFirst({
+    where: { parcelId: parcel.id, holdActive: true }
+  });
+  if (holdRecord) {
+    // Transition to TaxHold + notify citizen (best-effort).
+    const updated = await db.transferRequest.update({
+      where: { id: transfer.id },
+      data: { status: TransferStatus.TaxHold, version: { increment: 1 } },
+      include: { parcel: true, seller: true, buyer: true }
+    });
+    await writeAudit(request, AuditAction.Update, {
+      entityType: 'TransferRequest',
+      entityId: transfer.id,
+      oldSnapshot: { status: transfer.status },
+      newSnapshot: { status: 'TaxHold', reason: 'Outstanding tax dues detected', taxRecordId: holdRecord.id }
+    });
+    try {
+      const sellerUser = await db.ownerProfile.findUnique({
+        where: { id: transfer.sellerOwnerId },
+        select: { userId: true }
+      });
+      if (sellerUser?.userId) {
+        await dispatchNotification({
+          recipientUserId: sellerUser.userId,
+          channel: 'sms',
+          templateKey: 'transfer.tax_hold',
+          payload: { transferId: transfer.id, trackingId: transfer.trackingId, taxRecordId: holdRecord.id, outstanding: Number(holdRecord.calculatedAmount) - Number(holdRecord.paidAmount) },
+          scheduledAt: new Date()
+        });
+      }
+    } catch (error) {
+      console.error({ event: 'tax_hold_notification_failed', transferId: transfer.id, error: error.message });
+    }
+    return updated;
+  }
+  // No hold: transition Submitted → TaxVerified → UnderReview atomically.
+  // We do this in one update since the intermediate TaxVerified state has
+  // no user-observable side effect (it's a system-internal checkpoint per
+  // the state chart) and the audit log captures both transitions.
+  const updated = await db.transferRequest.update({
+    where: { id: transfer.id },
+    data: {
+      status: TransferStatus.UnderReview,
+      // Auto-advance from TaxVerified; assignment stays null until an
+      // officer opens the review (manual self-assignment).
+      version: { increment: 1 }
+    },
+    include: { parcel: true, seller: true, buyer: true }
+  });
+  await writeAudit(request, AuditAction.Update, {
+    entityType: 'TransferRequest',
+    entityId: transfer.id,
+    oldSnapshot: { status: transfer.status },
+    newSnapshot: { status: 'TaxVerified', reason: 'Automated tax check cleared' }
+  });
+  await writeAudit(request, AuditAction.Update, {
+    entityType: 'TransferRequest',
+    entityId: transfer.id,
+    oldSnapshot: { status: 'TaxVerified' },
+    newSnapshot: { status: 'UnderReview', reason: 'Auto-advanced to UnderReview for officer review' }
+  });
+  return updated;
 }
 
 export async function listTransfers({ query, request }) {
@@ -218,7 +318,13 @@ export async function submitTransfer({ id, input, request }) {
     oldSnapshot: { status: transfer.status },
     newSnapshot: { status: 'Submitted' }
   });
-  return transferDto(updated);
+
+  // PDF §4.5.1: "Upon submission, the request transitions to the Submitted
+  // state, where an automated tax check is performed against the Tax Record
+  // database." Run the check synchronously so the citizen sees the result
+  // immediately (TaxHold or UnderReview).
+  const afterCheck = await runAutomatedTaxCheck({ transfer: updated, request });
+  return transferDto(afterCheck);
 }
 
 export async function cancelTransfer({ id, input, request }) {

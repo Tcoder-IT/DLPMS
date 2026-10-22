@@ -99,6 +99,45 @@ export async function handlePaymentWebhook({ provider, body, signature, requestI
   if (payment.status === PaymentStatus.Completed) {
     return { accepted: true, idempotent: true, paymentId: payment.id, status: payment.status };
   }
+
+  // PDF §4.5.2: "If a webhook callback is received from telebirr, the
+  // transaction moves to the Processing state, where the webhook
+  // signature is validated against the shared secret key and the payment
+  // amount is verified against the expected tax amount."
+  //
+  // The signature was already validated BEFORE this point in
+  // handlePaymentWebhook — so once we reach here, signature is OK. We
+  // still need to verify the amount matches the expected tax due. The
+  // Processing transition is recorded; if the amount doesn't match, we
+  // transition to Failed.
+  await db.paymentTransaction.update({
+    where: { id: payment.id },
+    data: { status: PaymentStatus.Processing, version: { increment: 1 } }
+  });
+  await bestEffortAudit(requestId, AuditAction.WebhookReceived, {
+    entityType: 'PaymentTransaction',
+    entityId: payment.id,
+    newSnapshot: { status: 'Processing', transactionRef: payload.transactionRef }
+  });
+
+  // Amount verification (PDF §4.5.2: "the payment amount is verified
+  // against the expected tax amount"). The webhook payload's amount
+  // must match the recorded payment amount exactly (we trust the
+  // original initiatePayment amount; if the provider sends a different
+  // amount, that's a spoofing/investigation signal).
+  if (Number(payload.amount) !== Number(payment.amount)) {
+    await db.paymentTransaction.update({
+      where: { id: payment.id },
+      data: { status: PaymentStatus.Failed, providerPayload: payload, version: { increment: 1 } }
+    });
+    await bestEffortAudit(requestId, AuditAction.PaymentFail, {
+      entityType: 'PaymentTransaction',
+      entityId: payment.id,
+      newSnapshot: { status: 'Failed', reason: 'Amount mismatch', expected: Number(payment.amount), received: Number(payload.amount) }
+    });
+    throw new AppError(409, 'AMOUNT_MISMATCH', 'Webhook amount does not match the expected payment amount.');
+  }
+
   if (payload.status !== 'Completed') {
     // Failed / Pending callback — record but don't change to Completed.
     const failedUpdated = await db.paymentTransaction.update({

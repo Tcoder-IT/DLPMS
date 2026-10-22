@@ -11,12 +11,22 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 - `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
 
-## Milestone 9 (current)
+## Milestone 10 (current)
 
-Fills the two biggest UX gaps from M8: a citizen PWA Documents page with multipart upload + inline attach-to-transfer form, and a staff portal GIS page with a real Leaflet map (draw-on-map + GeoJSON file upload + verify against neighbours). Adds a new `GET /documents` API endpoint (paginated, ownership-scoped). See `MILESTONE.md` for the full scope.
+Correctness audit + workflow completion. Fixes 7 logical flaws in the M3–M9 implementation that violated the PDF state charts (§4.5.1 Land Transfer, §4.5.2 Payment):
+- `submitTransfer` now runs the auto-tax-check (→ TaxHold or UnderReview)
+- `TaxHold → Submitted` recovery loop (was wrongly → TaxVerified)
+- `applyCompletedPayment` auto-advances TaxHold transfers on the parcel
+- `createParcel` atomically issues the initial Certificate (UC-02 step 9)
+- Webhook transitions Pending → Processing → Completed with amount verification
+- 15-min payment timeout sweeper marks stuck payments Failed + notifies admin
+- New receipt PDF generator (UC-03 step 9) at `GET /payments/{id}/receipt.pdf`
+
+New UI: citizen PWA Payments page (initiate telebirr + replay webhook + download receipt), staff portal parcel detail page, staff portal appointments management page. See `MILESTONE.md` for the full audit.
 
 ## Earlier milestones
 
+- **M9** — citizen PWA document upload UI + staff portal Leaflet map UI.
 - **M8** — frontend integration (citizen PWA + staff portal wired to the API).
 - **M7** — *(skipped; PostGIS swap deferred)*
 - **M6** — document uploads + transfer-document review.

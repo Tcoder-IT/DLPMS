@@ -475,6 +475,17 @@ export const openapiSpecification = {
     '/payments/{id}': {
       get: { summary: 'Get a payment transaction', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Payment' }, ...errorResponses } }
     },
+    '/payments/{id}/receipt.pdf': {
+      get: {
+        summary: 'Download the tax receipt PDF (UC-03 step 9). Watermarked + QR-coded; ownership-checked; audit-logged.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          200: { description: 'PDF file', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } },
+          409: { description: 'Payment is not Completed' },
+          ...errorResponses
+        }
+      }
+    },
     '/payments/{id}/refund': {
       post: {
         summary: 'Refund a Completed payment (SystemAdmin only). Reverses the linked TaxRecord effects.',

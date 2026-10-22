@@ -5,10 +5,12 @@
 // ownership history + audit.
 
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
 import { writeAudit } from '../../middleware/auditMiddleware.js';
 import { AuditAction } from '@prisma/client';
+import { dispatchNotification } from '../notifications/notificationsService.js';
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -111,6 +113,7 @@ export async function createParcel({ input, request }) {
     throw new AppError(409, 'PARCEL_NUMBER_DUPLICATE', 'A parcel with that parcel number already exists.');
   }
 
+  const certificateNumber = `CERT-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`;
   const created = await db.$transaction(async (tx) => {
     const parcel = await tx.landParcel.create({
       data: {
@@ -134,14 +137,52 @@ export async function createParcel({ input, request }) {
         acquisitionMethod: 'initial_registration'
       }
     });
+    // UC-02 step 9: "System generates a unique Parcel ID and a digital
+    // certificate (PDF)." For the prototype the certificate row is created
+    // atomically with the parcel; the PDF is generated on-demand at
+    // POST /certificates/{id}/download (M5) which uses the qrPayload +
+    // certificateNumber stored here.
+    await tx.certificate.create({
+      data: {
+        parcelId: parcel.id,
+        ownerId: owner.id,
+        certificateNumber,
+        status: 'Active',
+        qrPayload: `DLPMS:${certificateNumber}`
+      }
+    });
     return parcel;
   });
 
   await writeAudit(request, AuditAction.Create, {
     entityType: 'LandParcel',
     entityId: created.id,
-    newSnapshot: { parcelNumber: created.parcelNumber, currentOwnerId: created.currentOwnerId }
+    newSnapshot: { parcelNumber: created.parcelNumber, currentOwnerId: created.currentOwnerId, certificateNumber }
   });
+  await writeAudit(request, AuditAction.CertificateIssue, {
+    entityType: 'Certificate',
+    entityId: certificateNumber,
+    newSnapshot: { parcelId: created.id, ownerId: owner.id, certificateNumber, origin: 'initial_registration' }
+  });
+
+  // Best-effort notification to the new owner.
+  try {
+    const ownerUser = await db.ownerProfile.findUnique({
+      where: { id: owner.id },
+      select: { userId: true, fullName: true }
+    });
+    if (ownerUser?.userId) {
+      await dispatchNotification({
+        recipientUserId: ownerUser.userId,
+        channel: 'sms',
+        templateKey: 'parcel.registered',
+        payload: { parcelId: created.id, parcelNumber: created.parcelNumber, certificateNumber },
+        scheduledAt: new Date()
+      });
+    }
+  } catch (error) {
+    console.error({ event: 'parcel_registration_notification_failed', parcelId: created.id, error: error.message });
+  }
 
   const full = await db.landParcel.findUnique({ where: { id: created.id }, include: { currentOwner: true } });
   return parcelDto(full);

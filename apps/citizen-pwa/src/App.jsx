@@ -14,6 +14,7 @@ import AppointmentsPage from './pages/AppointmentsPage.jsx';
 import CertificatesPage from './pages/CertificatesPage.jsx';
 import NotificationsPage from './pages/NotificationsPage.jsx';
 import DocumentsPage from './pages/DocumentsPage.jsx';
+import PaymentsPage from './pages/PaymentsPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
                 <Route path="/certificates" element={<CertificatesPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/documents" element={<DocumentsPage />} />
+                <Route path="/payments" element={<PaymentsPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </Layout>
