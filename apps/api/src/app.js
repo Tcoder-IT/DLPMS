@@ -22,6 +22,8 @@ import { webhooksRouter } from './modules/webhooks/webhooks.routes.js';
 import { appointmentsRouter, appointmentSlotsRouter } from './modules/appointments/appointments.routes.js';
 import { certificatesRouter } from './modules/certificates/certificates.routes.js';
 import { notificationsRouter, notificationTemplatesRouter } from './modules/notifications/notifications.routes.js';
+import { documentsRouter } from './modules/documents/documents.routes.js';
+import { transferDocumentsRouter } from './modules/transfers/transfers.routes.js';
 import { startReminderScheduler } from './modules/notifications/notificationsService.js';
 
 export function createApp() {
@@ -57,6 +59,8 @@ export function createApp() {
   app.use('/api/v1/appointment-slots', appointmentSlotsRouter);
   app.use('/api/v1/certificates', certificatesRouter);
   app.use('/api/v1/notifications', notificationsRouter);
+  app.use('/api/v1/documents', documentsRouter);
+  app.use('/api/v1/transfer-documents', transferDocumentsRouter);
   app.use('/api/v1/admin', adminUsersRouter);
   app.use('/api/v1/admin', auditRouter);
   app.use('/api/v1/admin', notificationTemplatesRouter); // /api/v1/admin/notification-templates

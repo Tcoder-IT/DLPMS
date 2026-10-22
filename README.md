@@ -11,12 +11,13 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 - `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
 
-## Milestone 5 (current)
+## Milestone 6 (current)
 
-Builds on M4 by adding the appointments + certificates + notifications sub-systems per `WORKFLOWS.md §6`, `§8` and `FR-30/31/32/36`. See `MILESTONE.md` for the full scope.
+Builds on M5 by adding the document upload pipeline + transfer-document review workflow per FR-05, FR-12 and `WORKFLOWS.md §7`, with all `SECURITY_DESIGN.md` File and document security rules enforced (magic-byte + extension + MIME + size + checksum validation, executable blocklist, private storage, server-side-authorized downloads). See `MILESTONE.md` for the full scope.
 
 ## Earlier milestones
 
+- **M5** — appointments, certificates (PDF + QR), notifications + 24h reminders.
 - **M4** — transfers, tax, GIS, payments, webhooks.
 - **M3** — identity, RBAC, audit hash chain, parcels, profile, admin users, audit-read endpoints.
 - **M2** — initial modular-monolith scaffold.

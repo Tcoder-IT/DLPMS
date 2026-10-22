@@ -1,134 +1,112 @@
-# DLPMS Milestone 5 — Appointments, Certificates, Notifications
+# DLPMS Milestone 6 — Document Uploads + Transfer-Document Review
 
-Builds on M4 (transfers/tax/GIS/payments/webhooks) by adding the three
-remaining sub-systems designated as core domain modules in PDF Chapter 4
-§4.3: the Appointment Scheduler, the Certificate Generator, and the
-Notification Sub-System. Per `AGENTS.md`, all outbound integrations remain
-adapter-based; mock/sandbox providers ship first, with no live credentials.
+Builds on M5 (appointments + certificates + notifications) by implementing
+the document upload pipeline and transfer-document review workflow per
+FR-05 (upload), FR-12 (verify), and `WORKFLOWS.md §7`. Per
+`SECURITY_DESIGN.md` (File and document security), uploads are
+authenticated and authorized, files are validated by content inspection
+(magic bytes) + extension + MIME type + size + checksum, executables are
+rejected, files live in private external storage, and **every** download
+is server-side authorized.
 
 ## What was added
 
-### Appointments module (`/appointments` + `/appointment-slots`)
-Implements `WORKFLOWS.md §6` (appointment workflow) and `FR-36` (24-hour
-reminders — handled in the notifications module's scheduler).
+### Storage adapter (mock local filesystem)
+`apps/api/src/lib/storageAdapter.js` — provider-neutral adapter per
+`AGENTS.md`. Files live under `STORAGE_ROOT` (default:
+`/home/z/my-project/storage/dlpms-docs`) in a 2-level prefix layout
+(`${2-char-prefix}/${uuid}${ext}`) to avoid a flat directory at scale.
+Storage keys are validated by regex on every read to prevent path
+traversal. Production swaps this for S3/NAS without changing the
+`DocumentMetadata` schema (`storage_adapter` + `storage_key` remain
+stable).
 
-- `GET /appointments` — paginated list (Citizens see only their own;
-  LandOfficers see only those assigned to them; SystemAdmin sees all)
-- `POST /appointments` — book an appointment (Citizen/SystemAdmin).
-  Real-time double-book recheck using a ±30-minute slot window around
-  the requested time. The citizen must have an `OwnerProfile`. The
-  selected officer must be an active `LandOfficer`. Booking triggers
-  two notifications: an immediate SMS confirmation and a queued 24-hour
-  reminder.
-- `GET /appointments/{id}` — ownership-checked read
-- `PATCH /appointments/{id}` — reschedule (rechecks slot availability;
-  version-protected via `expectedVersion`)
-- `POST /appointments/{id}/cancel` — within a **configurable**
-  cancellation window (default 2 hours, controllable via
-  `SystemSetting` per AGENTS.md "make it configurable; do not assume a
-  duration")
-- `GET /appointment-slots` — list slots (LandOfficer sees own;
-  SystemAdmin sees all)
-- `POST /appointment-slots` — create slots (LandOfficer/SystemAdmin);
-  5–240 minute duration range; unique constraint on
-  `(officerId, startsAt, endsAt)` rejects duplicates
+### Documents module (`/documents`)
+- `POST /documents` — multipart/form-data upload. The pipeline:
+  1. **multer** pre-filters MIME type (defense in depth) and enforces a
+     10 MB size limit at the multipart layer.
+  2. The service re-checks magic bytes against allowed signatures (PDF
+     `%PDF-`, PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`).
+  3. Extension allowlist (`pdf`, `png`, `jpg`, `jpeg`) plus an explicit
+     **blocklist** for executables/scripts/archives (`exe`, `dll`, `so`,
+     `sh`, `js`, `py`, `php`, `zip`, `tar`, `gz`, …).
+  4. **MIME/extension must match magic bytes** — a PDF header with a
+     `.png` extension is rejected.
+  5. SHA-256 checksum is computed and stored on `DocumentMetadata.checksum`.
+  6. `classification = 'restricted'` by default per the existing schema.
+  7. `scanStatus = 'pending'` — malware scanning is a deployment decision
+     per `SECURITY_DESIGN.md`, so the schema reserves the field.
+  8. Upload is audit-logged.
+- `GET /documents/{id}` — metadata only, ownership-checked (uploader
+  OR officer/admin OR document is attached to a transfer where the
+  citizen is a party). Never returns the file content.
+- `GET /documents/{id}/content` — server-side authorized download:
+  - Streams from the storage adapter (never buffers the whole file in
+    memory — large PDFs and images stream cleanly).
+  - Sets `Content-Type` to the file media type,
+    `Content-Disposition: attachment; filename="…"`,
+    `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`.
+  - Audit-logged **before** streaming so a stream failure does not skip
+    the audit row.
 
-### Certificates module (`/certificates`)
-Implements `FR-32` (PDF certificate with digital signature + watermark
-+ QR code) and `WORKFLOWS.md §8`.
+### Transfer-document wiring (`/transfers/{id}/documents`, `/transfer-documents/{id}/review`)
+Implements `WORKFLOWS.md §7` (document review, approval, and rejection).
+- `POST /transfers/{id}/documents` — attach an existing uploaded
+  document to a transfer (creates a `TransferDocument` row). Idempotent:
+  re-attaching the same `(transferId, documentId)` returns the existing
+  row. Citizens can only attach documents they uploaded; officers may
+  attach any document on a citizen's behalf.
+- `GET /transfers/{id}/documents` — list documents attached to a
+  transfer, with their verification status. Citizens limited to
+  transfers where they are a party.
+- `POST /transfer-documents/{id}/review` — officer review, sets
+  `verificationStatus` to `Verified` / `Rejected` / `AdditionalRequested`
+  with a documented reason. Stores `verifiedById` and `verifiedAt`.
+  Audited. Optimistic concurrency via `expectedVersion`.
 
-- `GET /certificates/{id}` — fetch metadata (Citizens limited to own)
-- `POST /certificates/{id}/download` — streams a real PDF generated
-  with `pdfkit` + `qrcode`:
-  - Header: "DIRE DAWA LAND ADMINISTRATION — Land Ownership Certificate"
-  - Certificate number, status, issue date
-  - Parcel information block (parcel number, location, declared size, land use)
-  - Registered owner block (full name, national ID, address)
-  - QR code linking to `/api/v1/certificates/{id}` (the verification endpoint)
-  - Diagonal watermark: "PROTOTYPE — NOT LEGALLY BINDING"
-  - Footer disclaimer about pending signing authority per PROJECT_DECISIONS.md
-  - Download is audit-logged before PDF generation so a PDF-generation
-    failure does not skip the audit row.
-
-Per `PROJECT_DECISIONS.md`, the legal signing authority, key management,
-and QR payload format are unspecified — the prototype is explicit about
-this in the watermark and footer.
-
-### Notifications module (`/notifications` + admin templates)
-Implements `FR-30` (SMS), `FR-31` (email), and `FR-36` (24-hour reminders).
-Per `SECURITY_DESIGN.md` "CIS, SMS, email, and storage adapters have
-least-privilege credentials" — the prototype ships a mock provider that
-records the `Notification` row and immediately marks it `Sent` (dev) or
-leaves it `Queued` (production simulation).
-
-- `GET /notifications` — paginated list scoped to `request.user.id`
-- `GET /notifications/unread` — count of `Queued` notifications for the user
-- `PATCH /notifications/{id}/read` — mark as read (recipient-scoped)
-- `GET /admin/notification-templates` — list templates (SystemAdmin).
-  Templates are stored as `SystemSetting` rows keyed
-  `notification.template.{key}` so administrators can edit them
-  without code changes.
-
-### In-process 24-hour reminder scheduler (FR-36)
-`notificationsService.startReminderScheduler()` runs a 5-minute interval
-that:
-1. Finds `Scheduled` appointments whose `scheduledAt` is 24h ± 5min from now
-2. Looks up the citizen user from the linked `OwnerProfile`
-3. Dispatches a `Queued` `appointment.reminder_24h` notification (idempotent
-   by checking existing notifications for the same `appointmentId`)
-
-The timer is `unref()`'d so the process can still exit cleanly. Multi-
-instance deployments need a distributed lock (e.g., `pg_advisory_lock`)
-to avoid duplicate reminders — out of scope for M5.
-
-### Cross-module wiring (best-effort notification dispatch)
-- `transfersService.approveTransfer` — after the ACID ownership transfer,
-  dispatches an SMS to the seller and a separate SMS to the buyer
-  (per `WORKFLOWS.md §3 step 7` "produces certificate, sends
-  notification"). Failures are logged but do not fail the transfer.
-- `appointmentsService.bookAppointment` — dispatches the immediate
-  confirmation SMS and queues the 24-hour reminder.
+  Per `SECURITY_DESIGN.md`: "Transfer decisions cannot bypass documented
+  validation steps. Review decisions and accessed sensitive records are
+  audited." `transfersService.approveTransfer` already requires all
+  transfer documents to be `Verified` before approval (implemented in M4).
 
 ### Schema additions
-- `AuditAction` enum extended with: `AppointmentBook`,
-  `AppointmentCancel`, `AppointmentReschedule`, `CertificateIssue`,
-  `CertificateDownload`, `NotificationDispatch`.
+`AuditAction` enum extended with: `DocumentUpload`, `DocumentReview`,
+`DocumentDownload`.
 
 ### Env / config
-- `PUBLIC_BASE_URL` added to `.env.example` and `env.js` — used to build
-  the QR-code verification URL embedded in certificate PDFs.
-- `apps/api/src/app.js` mounts 3 new routers under `/api/v1`:
-  `/appointments`, `/appointment-slots`, `/certificates`,
-  `/notifications`, and `/admin/notification-templates`.
-- The reminder scheduler is started on boot unless `NODE_ENV=production`
-  and `ENABLE_SCHEDULER != 'true'`.
+- `STORAGE_ROOT` env var added to `.env.example` — controls where the
+  mock filesystem adapter stores uploaded files.
+- `apps/api/src/app.js` mounts 2 new routers under `/api/v1`: `/documents`
+  and `/transfer-documents`. The transfers router now also handles
+  `/:id/documents` (attach + list).
 
 ### OpenAPI
-Spec at `/api-docs` now documents **50 endpoints** (up from 40 in M4,
-19 in M3, 1 in M2).
+Spec at `/api-docs` now documents **55 endpoints** (up from 50 in M5).
 
 ## Security controls reaffirmed
 
 | SECURITY_DESIGN.md rule | Where |
 |---|---|
-| Server-side ownership for citizen resources | appointments, certificates, notifications all check `request.user.ownerProfile.id` or `request.user.id` |
-| Configurable, not hard-coded business policy | `appointment.cancellation_window_hours` is a `SystemSetting`; AGENTS.md compliance |
-| Real-time slot availability recheck | `bookAppointment` and `rescheduleAppointment` both query for conflicting slots at the moment of mutation |
-| Optimistic concurrency (409 Conflict) | all PATCH endpoints take `expectedVersion` |
-| Audit logging of privileged actions | certificate download is audit-logged before PDF generation |
-| Notifications behind an adapter | mock provider in `notificationsService.dispatchNotification` — swappable for real Africa's Talking/Twilio/email |
-| Background scheduling remains inside the monolith | `setInterval`-based in-process scheduler (PDF §4.8) |
-| Idempotent notification dispatch | reminder scheduler checks for existing notifications before dispatching |
+| Upload through authenticated, authorized endpoints only | `documentsRouter.use(requireAuth)` |
+| Validate file type by content inspection | `documentsService.detectType` magic-byte check |
+| Validate extension | `EXTENSION_ALLOWLIST` + `EXTENSION_BLOCKLIST` |
+| Validate MIME type | `MIME_ALLOWLIST` + multer fileFilter pre-check |
+| Validate size limit | multer 10 MB + service re-check after buffer load |
+| Validate checksum | SHA-256 computed in `persistFile` |
+| Reject executable/unsupported content | `EXTENSION_BLOCKLIST` blocks `.exe/.dll/.so/.sh/.js/.py/.zip/…` |
+| Private external storage, no public paths | `storageAdapter` writes to private root; downloads gated by `/documents/{id}/content` |
+| Authorize every download server-side | `streamDocumentContent` ownership check + audit |
+| Treat IDs, deeds, sale agreements as sensitive | `classification = 'restricted'` by default; `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store` |
+| Audit document review | `reviewTransferDocument` writes `DocumentReview` audit entry |
+| Optimistic concurrency on editable records | `reviewTransferDocument` takes `expectedVersion` |
 
 ## What is still intentionally NOT in this milestone
 
-- Real SMS/email provider credentials (still mock)
-- Real certificate signing authority (watermark is explicit about this)
-- Document uploads (`/documents`) — still deferred
+- Real malware scanning/quarantine (deployment decision per `SECURITY_DESIGN.md`)
+- Real S3/NAS storage adapter (mock local FS adapter in place — swappable)
+- Public search (`GET /public/parcels/search`) — fields pending business/privacy policy per `PROJECT_DECISIONS.md`
 - CIS adapter (production contract pending)
 - Frontend integration (citizen PWA + staff portal remain M2 placeholders)
 - PostGIS spatial indexes (still `Json` for boundaries)
 - Multi-instance distributed lock for the reminder scheduler
-
-These remain governed by the blueprint documents and will be addressed in
-subsequent milestones.
+- Real SMS/email/certificate-signing authority providers (still mocks)

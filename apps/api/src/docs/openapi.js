@@ -616,6 +616,67 @@ export const openapiSpecification = {
     '/admin/notification-templates': {
       get: { summary: 'List notification templates (SystemAdmin)', responses: { 200: { description: 'Templates list' }, ...errorResponses } }
     },
+    '/documents': {
+      post: {
+        summary: 'Upload a supporting document (PDF/PNG/JPEG, max 10MB). Magic-byte + extension + MIME + size validation.',
+        description: 'Per SECURITY_DESIGN.md (File and document security): uploads are authenticated and authorized; file type is validated by content inspection, extension, MIME type, size limit, and checksum; executable/unsupported content is rejected; files are stored in private external storage; the database retains controlled metadata only — never a public URL. Every download is server-side authorized at GET /documents/{id}/content.',
+        requestBody: {
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: { type: 'string', format: 'binary', description: 'PDF, PNG, or JPEG up to 10MB' },
+                  classification: { type: 'string', default: 'restricted', description: 'Default restricted; reserved for future policy-driven classification' }
+                }
+              }
+            }
+          }
+        },
+        responses: { 201: { description: 'Document metadata stored' }, 400: { description: 'Validation failed' }, 413: { description: 'File too large' }, 415: { description: 'Unsupported file type' } }
+      }
+    },
+    '/documents/{id}': {
+      get: {
+        summary: 'Get document metadata (ownership-checked). Never returns the file content.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { 200: { description: 'Document metadata' }, ...errorResponses }
+      }
+    },
+    '/documents/{id}/content': {
+      get: {
+        summary: 'Download the file (authenticated, server-side authorized, audit-logged, streamed from private storage).',
+        description: 'Streams the file from the storage adapter. Sets Content-Type to the file media type, Content-Disposition: attachment, X-Content-Type-Options: nosniff, Cache-Control: private, no-store. Per SECURITY_DESIGN.md, ownership is server-side checked before the file is released.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          200: { description: 'Binary file', content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } },
+          ...errorResponses
+        }
+      }
+    },
+    '/transfers/{id}/documents': {
+      post: {
+        summary: 'Attach an uploaded document to a transfer (Citizens limited to documents they uploaded; officers may attach any document).',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['documentId', 'documentType'], properties: { documentId: { type: 'string', format: 'uuid' }, documentType: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Document attached; idempotent on repeat calls' }, ...errorResponses }
+      },
+      get: {
+        summary: 'List documents attached to a transfer (Citizens limited to transfers where they are a party).',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { 200: { description: 'List of attached documents with their verification status' }, ...errorResponses }
+      }
+    },
+    '/transfer-documents/{id}/review': {
+      post: {
+        summary: 'Officer review of a transfer document (Verified / Rejected / AdditionalRequested). Documented reason required.',
+        description: 'Per WORKFLOWS.md §7: the officer records the verification result, rejection reason, or request for additional documents. Transfer decisions cannot bypass documented validation steps; review decisions and accessed sensitive records are audited.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['verificationStatus', 'reason', 'expectedVersion'], properties: { verificationStatus: { type: 'string', enum: ['Pending', 'Verified', 'Rejected', 'AdditionalRequested'] }, reason: { type: 'string' }, expectedVersion: { type: 'integer' } } } } } },
+        responses: { 200: { description: 'Document reviewed; verification status updated' }, ...errorResponses }
+      }
+    },
     '/admin/users': {
       get: { summary: 'List users (SystemAdmin)', responses: { 200: { description: 'User list' } } }
     },
