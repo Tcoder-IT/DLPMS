@@ -131,6 +131,8 @@ enum AuditAction {
   SettingsUpdate
   ReportView
   PublicSearch
+  CertificateRevoke
+  CertificateReissue
 }
 
 // ---------------------------------------------------------------------------

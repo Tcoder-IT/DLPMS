@@ -11,10 +11,12 @@
   "dependencies": {
     "@dlpms/shared-types": "file:../../packages/shared-types",
     "clsx": "^2.1.1",
+    "i18next": "^26.5.8",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.61.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-i18next": "^17.1.6",
     "react-leaflet": "^4.2.1",
     "react-router-dom": "^6.30.1"
   },

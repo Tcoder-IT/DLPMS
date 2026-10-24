@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
 import { NotificationStatus, RoleCode } from '@prisma/client';
+import { withAdvisoryLock, ADVISORY_KEYS } from '../../lib/advisoryLock.js';
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -154,7 +155,9 @@ export function stopReminderScheduler() {
 }
 
 async function runReminderCycle() {
-  try {
+  // Per PDF §4.8.2 + multi-instance deployment guidance: acquire an
+  // advisory lock so only one instance processes reminders per cycle.
+  await withAdvisoryLock(ADVISORY_KEYS.APPOINTMENT_REMINDER, async () => {
     const now = Date.now();
     const windowStart = new Date(now + 24 * 60 * 60 * 1000 - REMINDER_WINDOW_MS);
     const windowEnd = new Date(now + 24 * 60 * 60 * 1000 + REMINDER_WINDOW_MS);
@@ -186,10 +189,7 @@ async function runReminderCycle() {
         scheduledAt: new Date()
       });
     }
-  } catch (error) {
-    // Best-effort: scheduler failures must not crash the API.
-    console.error({ event: 'reminder_scheduler_failed', error: error.message });
-  }
+  });
 }
 
 export async function getMyUnreadCount({ request }) {
@@ -246,7 +246,7 @@ export function stopNotificationRetryScheduler() {
 }
 
 async function runRetryCycle() {
-  try {
+  await withAdvisoryLock(ADVISORY_KEYS.NOTIFICATION_RETRY, async () => {
     const due = await db.notification.findMany({
       where: {
         status: NotificationStatus.Queued,
@@ -258,9 +258,7 @@ async function runRetryCycle() {
     for (const n of due) {
       await processNotificationAttempt(n);
     }
-  } catch (error) {
-    console.error({ event: 'notification_retry_cycle_failed', error: error.message });
-  }
+  });
 }
 
 async function processNotificationAttempt(notification) {

@@ -13,6 +13,8 @@
 
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
 import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
@@ -189,4 +191,117 @@ function certificateDto(cert, { withRelations = false } = {}) {
         }
       : {})
   };
+}
+
+// ---------------------------------------------------------------------------
+// Certificate lifecycle: revocation + reissue
+//
+// Per the certificate state model (PDF §3.3.4 class diagram + the
+// CertificateStatus enum): Active → Revoked (admin) or Active → Replaced
+// (when a reissue creates a new Active cert for the same parcel+owner).
+//
+// Revocation: only SystemAdmin per SECURITY_DESIGN.md "elevated actions are
+// audited" — refund, certificate revocation, and other privileged admin
+// operations are restricted to SystemAdmin.
+//
+// Reissue: LandOfficer or SystemAdmin. Creates a new Active certificate with
+// a fresh certificateNumber + qrPayload; the previous cert is atomically
+// marked Replaced in the same transaction.
+// ---------------------------------------------------------------------------
+
+const reasonSchema = z.object({
+  reason: z.string().min(1).max(2000)
+});
+
+export async function revokeCertificate({ id, input, request }) {
+  if (request.role?.code !== RoleCode.SystemAdmin) {
+    throw new AppError(403, 'FORBIDDEN', 'Certificate revocation is restricted to System Administrators.');
+  }
+  const parsed = reasonSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new AppError(400, 'VALIDATION_FAILED', 'Reason is required.', {
+      issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message }))
+    });
+  }
+  const cert = await db.certificate.findUnique({ where: { id } });
+  if (!cert) {
+    throw new AppError(404, 'NOT_FOUND', 'Certificate not found.');
+  }
+  if (cert.status !== 'Active') {
+    throw new AppError(409, 'NOT_ACTIVE', `Certificate is in ${cert.status} state; only Active certificates can be revoked.`);
+  }
+  const updated = await db.certificate.update({
+    where: { id },
+    data: {
+      status: 'Revoked',
+      revokedAt: new Date(),
+      version: { increment: 1 }
+    },
+    include: { parcel: true, owner: true }
+  });
+  await writeAudit(request, AuditAction.CertificateRevoke, {
+    entityType: 'Certificate',
+    entityId: id,
+    oldSnapshot: { status: 'Active', certificateNumber: cert.certificateNumber },
+    newSnapshot: { status: 'Revoked', revokedAt: updated.revokedAt.toISOString(), reason: parsed.data.reason }
+  });
+  return certificateDto(updated, { withRelations: true });
+}
+
+export async function reissueCertificate({ id, input, request }) {
+  if (request.role?.code !== RoleCode.LandOfficer && request.role?.code !== RoleCode.SystemAdmin) {
+    throw new AppError(403, 'FORBIDDEN', 'Certificate reissue is restricted to Land Officers and System Administrators.');
+  }
+  const parsed = reasonSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new AppError(400, 'VALIDATION_FAILED', 'Reason is required.', {
+      issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message }))
+    });
+  }
+  const oldCert = await db.certificate.findUnique({
+    where: { id },
+    include: { parcel: true, owner: true }
+  });
+  if (!oldCert) {
+    throw new AppError(404, 'NOT_FOUND', 'Certificate not found.');
+  }
+  if (oldCert.status !== 'Active') {
+    throw new AppError(409, 'NOT_ACTIVE', `Certificate is in ${oldCert.status} state; only Active certificates can be reissued.`);
+  }
+
+  // ACID transaction (NFR-06): mark old cert as Replaced, create new Active
+  // cert with a fresh certificateNumber + qrPayload for the same parcel + owner.
+  const newCertificateNumber = `CERT-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const newCert = await db.$transaction(async (tx) => {
+    // Mark the old cert as Replaced.
+    await tx.certificate.update({
+      where: { id },
+      data: {
+        status: 'Replaced',
+        revokedAt: new Date(),
+        version: { increment: 1 }
+      }
+    });
+    // Create the replacement Active certificate.
+    return tx.certificate.create({
+      data: {
+        parcelId: oldCert.parcelId,
+        ownerId: oldCert.ownerId,
+        transferId: oldCert.transferId,
+        certificateNumber: newCertificateNumber,
+        status: 'Active',
+        qrPayload: `DLPMS:${newCertificateNumber}`
+      },
+      include: { parcel: true, owner: true }
+    });
+  });
+
+  await writeAudit(request, AuditAction.CertificateReissue, {
+    entityType: 'Certificate',
+    entityId: newCert.id,
+    oldSnapshot: { previousCertificateId: id, previousCertificateNumber: oldCert.certificateNumber, status: 'Active' },
+    newSnapshot: { newCertificateNumber, status: 'Active', reason: parsed.data.reason, replaces: id }
+  });
+
+  return certificateDto(newCert, { withRelations: true });
 }

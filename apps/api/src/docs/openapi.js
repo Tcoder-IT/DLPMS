@@ -606,6 +606,22 @@ export const openapiSpecification = {
         }
       }
     },
+    '/certificates/{id}/revoke': {
+      post: {
+        summary: 'Revoke an Active certificate (SystemAdmin only). Audited as CertificateRevoke. Subsequent downloads return 409 CERT_NOT_ACTIVE.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Certificate revoked' }, ...errorResponses }
+      }
+    },
+    '/certificates/{id}/reissue': {
+      post: {
+        summary: 'Reissue an Active certificate (LandOfficer/SystemAdmin). Atomically marks old as Replaced + creates a new Active certificate with fresh certificateNumber + qrPayload. Audited as CertificateReissue.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } } } } } },
+        responses: { 201: { description: 'New Active certificate issued' }, ...errorResponses }
+      }
+    },
     '/notifications': {
       get: {
         summary: 'List my notifications (recipient-scoped)',

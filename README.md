@@ -11,22 +11,18 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 - `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
 
-## Milestone 11 (current)
+## Milestone 12 (current)
 
-Closes the audit-trail gaps identified in M10's deferred-items list. Every item maps to the exact PDF reference:
-- **NFR-07** audit-on-views for sensitive GETs (parcels, transfers, documents, certificates, payments)
-- **FR-02** OTP required on login by default (was opt-in)
-- **§4.3 sub-system 7** notification retry processor with exponential backoff (30s → 2m → 8m → 32m → 128m, cap 5 retries)
-- **FR-27** new `/admin/settings` endpoints (tax rates, fees, appointment window, notification templates) — SystemAdmin
-- **FR-15, FR-21, §4.3 sub-system 6** new `/reports/{registrations,transfers,tax-compliance,operations}` with date + subCity filters + CSV export
-- **FR-10** new `/public/parcels/search` — public, no auth, rate-limited (20/min/IP), returns only public fields (NO owner name/national ID/contact per PROJECT_DECISIONS.md privacy deference)
+Implements three of the remaining audit items from M11's deferred list:
+- **NFR-11 + §4.9.5 Amharic localization** — full i18n (i18next + react-i18next) for both apps. English + Amharic resource bundles. Language switcher in both Layouts with immediate re-render (no page reload). AuthContext syncs language from `user.preferredLanguage` on login.
+- **Certificate revocation + reissue lifecycle** — `POST /certificates/{id}/revoke` (SystemAdmin) + `POST /certificates/{id}/reissue` (LandOfficer/SystemAdmin). ACID transaction for reissue: marks old as `Replaced`, creates new `Active` cert with fresh certificateNumber + qrPayload.
+- **Multi-instance scheduler locks** — `pg_try_advisory_xact_lock` wraps the 3 scheduler cycles (appointment reminder, payment timeout, notification retry). Prevents duplicate processing across multiple API instances.
 
-3 new AuditAction values: `SettingsUpdate`, `ReportView`, `PublicSearch`.
-
-UI: staff portal Settings page + Reports page; citizen PWA Public Search page (accessible without auth). OpenAPI now 63 endpoints. See `MILESTONE.md` for the full scope.
+2 new AuditAction values: `CertificateRevoke`, `CertificateReissue`. OpenAPI now 65 endpoints. See `MILESTONE.md` for the full scope.
 
 ## Earlier milestones
 
+- **M11** — audit-trail gaps closed (NFR-07 views, FR-02 OTP default, FR-10 public search, FR-15/21/27 reports + settings, §4.3 sub-system 6+7 retry).
 - **M10** — workflow correctness audit (7 logical flaws fixed in transfer + payment state machines).
 - **M9** — citizen PWA document upload UI + staff portal Leaflet map UI.
 - **M8** — frontend integration (citizen PWA + staff portal wired to the API).

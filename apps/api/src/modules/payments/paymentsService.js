@@ -14,6 +14,7 @@ import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
 import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
 import { AuditAction, PaymentMethod, PaymentStatus } from '@prisma/client';
+import { withAdvisoryLock, ADVISORY_KEYS } from '../../lib/advisoryLock.js';
 import {
   getProviderName,
   issueTransactionReference,
@@ -318,7 +319,7 @@ export function stopPaymentTimeoutScheduler() {
 }
 
 async function runPaymentTimeoutCycle() {
-  try {
+  await withAdvisoryLock(ADVISORY_KEYS.PAYMENT_TIMEOUT, async () => {
     const cutoff = new Date(Date.now() - PAYMENT_TIMEOUT_WINDOW_MS);
     // Any Pending or Processing payment older than 15 min from now is timed out.
     const stale = await db.paymentTransaction.findMany({
@@ -362,7 +363,5 @@ async function runPaymentTimeoutCycle() {
         console.error({ event: 'payment_timeout_notification_failed', paymentId: p.id, error: error.message });
       }
     }
-  } catch (error) {
-    console.error({ event: 'payment_timeout_scheduler_failed', error: error.message });
-  }
+  });
 }

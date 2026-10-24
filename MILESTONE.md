@@ -1,183 +1,90 @@
-# DLPMS Milestone 11 — Remaining audit items per PDF (NFR-07, FR-02, FR-10, FR-15, FR-21, FR-27, §4.3 sub-systems 6+7)
+# DLPMS Milestone 12 — Amharic localization (NFR-11, §4.9.5) + Certificate revocation/reissue lifecycle + Multi-instance scheduler locks
 
-This milestone closes the audit-trail gaps identified in M10's deferred-items
-list. Every item is mapped to the exact PDF reference that mandates it.
+This milestone implements three of the remaining audit items from M11's deferred list:
 
-## Backend additions
+1. **NFR-11 + §4.9.5 Amharic localization** — full i18n for both apps
+2. **Certificate revocation + reissue lifecycle** — closes the cert state model
+3. **Multi-instance scheduler locks** — pg_advisory_xact_lock for the 3 schedulers
 
-### 1. Audit-on-views (NFR-07)
-> NFR-07: "All CRUD operations must be logged with tamper-evident audit entries including timestamp, user ID, and action type. 100% of operations logged."
+## What was added
 
-Previously only mutations were audited. M11 adds a new `auditView(request,
-entityType, entityId, extra)` helper in `auditMiddleware.js` (best-effort —
-failures are logged but don't block the response). Called from all sensitive
-GET endpoints:
+### 1. Amharic localization (NFR-11, §4.9.5)
+> NFR-11: "The system shall support Amharic and English languages with user-selectable language preference. All UI labels, messages, and system notifications rendered correctly in both languages."
+> §4.9.5: "The language switcher component provides immediate language switching between Amharic and English without page reload."
 
-| Endpoint | Audit entity |
-|---|---|
-| `GET /parcels/{id}` | LandParcel |
-| `GET /parcels/{id}/ownership-history` | LandParcel (view: 'ownership-history') |
-| `GET /transfers/{id}` | TransferRequest |
-| `GET /documents/{id}` | DocumentMetadata |
-| `GET /certificates/{id}` | Certificate |
-| `GET /payments/{id}` | PaymentTransaction |
+Both apps now ship with:
+- `i18next` + `react-i18next` initialized in `src/i18n/index.js`
+- English resource bundle `src/i18n/locales/en.json` (6 namespaces: app, nav, common, status, pages, errors)
+- Amharic resource bundle `src/i18n/locales/am.json` (full Amharic translations of all keys)
+- `<LanguageSwitcher>` component in both Layouts — uses `i18n.changeLanguage()` which immediately re-renders all `useTranslation()`-subscribed components WITHOUT page reload (satisfies §4.9.5)
+- Language choice persisted in `localStorage` (`dlpms.locale` for citizen PWA, `dlpms.staff.locale` for staff portal — separate keys so sessions don't bleed)
+- `<html lang="...">` attribute updated for accessibility (screen readers)
+- `AuthContext` syncs the language from `user.preferredLanguage` on login (unless the user has already explicitly switched this session — the localStorage value signals that)
+- All nav labels + the top-bar strings now go through `t()` — the language switcher re-renders the entire shell instantly
 
-View audits are written **after** authorization checks pass — failed
-authorization (403) does NOT produce an audit row, since the actor was denied
-before seeing the data.
+The Layouts use `t()` for nav labels + the log-out button + the app title. The page components themselves still have hardcoded English strings for now (the deepest translation layer); the foundation is in place — subsequent commits can replace individual strings with `t()` calls without restructuring.
 
-### 2. OTP required on login by default (FR-02)
-> FR-02: "Login using phone number or email with password and OTP verification."
+### 2. Certificate revocation + reissue lifecycle
+> §3.3.4 class diagram + `CertificateStatus` enum: Active → Revoked (admin) or Active → Replaced (when reissue creates a new Active cert).
 
-Previously `REQUIRE_OTP_ON_LOGIN` defaulted to `false`. M11 flips the default
-to `true` (opt-out for dev). The error message tells the citizen how to
-proceed: "OTP verification is required before login. Call POST /auth/otp/request, then POST /auth/otp/verify."
+New endpoints in `apps/api/src/modules/certificates/`:
+- `POST /certificates/{id}/revoke` (SystemAdmin only) — sets `status=Revoked`, `revokedAt=now`; audit-logged as `CertificateRevoke`. Subsequent `POST /certificates/{id}/download` returns 409 `CERT_NOT_ACTIVE` (already implemented in `downloadCertificatePdf`).
+- `POST /certificates/{id}/reissue` (LandOfficer/SystemAdmin) — ACID transaction:
+  - Marks old cert as `Replaced` with `revokedAt=now`
+  - Creates new `Active` certificate with fresh `certificateNumber` (`CERT-YYYY-XXXXXXXX`) + `qrPayload`
+  - Audit-logged as `CertificateReissue` with both old + new snapshots
 
-`.env.example` documents the new default + dev override.
+Per SECURITY_DESIGN.md "elevated actions are audited" — refund, certificate revocation, and other privileged admin operations are restricted to SystemAdmin.
 
-### 3. Notification retry processor with exponential backoff (§4.3 sub-system 7)
-> §4.3 sub-system 7: "The notification queue handles retries for failed deliveries with exponential backoff."
+### 3. Multi-instance scheduler locks
+> §4.8.2 + deployment guidance: "Database connection pooling is managed through Prisma's built-in connection pooler."
 
-New `startNotificationRetryScheduler()` in `notificationsService.js`. A
-30-second `setInterval` cycle:
-1. Polls `Queued` notifications whose `scheduledAt <= now`.
-2. Attempts mock dispatch (simulates 1% failure rate in dev to exercise the
-   retry path).
-3. On success: marks `Sent`, increments `retryCount`.
-4. On failure: increments `retryCount`, reschedules with exponential backoff
-   (30s → 2m → 8m → 32m → 128m).
-5. After 5 retries: marks `Failed` + logs to console.
+New `apps/api/src/lib/advisoryLock.js` exposes `withAdvisoryLock(key, fn)`:
+- Opens a Prisma transaction
+- Calls `pg_try_advisory_xact_lock(key)` (transaction-scoped; auto-released on commit/rollback; non-blocking — returns immediately with `true`/`false`)
+- If acquired: runs the cycle body
+- If not acquired (another instance is processing): silently skips this cycle
+- If DB unreachable: logs + returns `null` (best-effort; scheduler doesn't crash)
 
-Started on boot in `app.js` alongside the appointment reminder scheduler and
-the payment 15-min timeout sweeper. Timer is `unref()`'d for clean process
-exit. Multi-instance deployments need a distributed lock (pg_advisory_lock)
-— out of scope, documented.
+Stable 64-bit integer keys per scheduler:
+- `APPOINTMENT_REMINDER = 1001`
+- `PAYMENT_TIMEOUT = 1002`
+- `NOTIFICATION_RETRY = 1003`
 
-### 4. Settings module (FR-27)
-> FR-27: "Configure system parameters including tax rates, fees, and notification templates."
+All 3 scheduler cycle bodies (`runReminderCycle`, `runPaymentTimeoutCycle`, `runRetryCycle`) now wrap their work in `withAdvisoryLock()`. In a single-instance dev deployment, the lock is always immediately granted (no contention). In a multi-instance production deployment, only one instance processes each cycle per round — preventing duplicate reminders, double-marking payments as Failed, or duplicate notification dispatch.
 
-New module at `apps/api/src/modules/settings/`:
+### Schema additions
+2 new `AuditAction` enum values: `CertificateRevoke`, `CertificateReissue`.
 
-- `GET /admin/settings` — list all settings (SystemAdmin only, audit-logged as `View`)
-- `GET /admin/settings/:key` — fetch single setting
-- `PATCH /admin/settings/:key` — create or update a setting; upsert
-  behavior; audit-logged as `SettingsUpdate` with old + new snapshot
+## Frontend
 
-Setting keys are validated against `/^[a-z][a-z0-9._-]{2,99}$/i` to prevent
-typos in code that hard-codes key lookups. Documented known keys:
-`tax.rate_per_sqm_etb`, `tax.surcharge_factor`,
-`appointment.cancellation_window_hours`, `notification.template.{key}`.
+### Citizen PWA
+- New `src/i18n/` directory: `index.js` setup + `locales/en.json` + `locales/am.json`
+- New `src/components/LanguageSwitcher.jsx` — rendered in Layout top bar
+- `Layout.jsx` rewritten to use `t()` for nav labels + app title + log-out button
+- `AuthContext.jsx` syncs language from `user.preferredLanguage` on login/register/refresh
+- `lib/format.js` exports new `useStatusTranslator()` hook for translating status enum values
 
-### 5. Reports module (FR-15, FR-21, §4.3 sub-system 6)
-> FR-15: "Generate comprehensive reports on land registrations and transfers" (Land Officer)
-> FR-21: "Generate tax compliance reports by period and sub-city" (Tax Official)
-> §4.3 sub-system 6: "The report generator produces land registration summaries, transfer reports, tax collection summaries, and operational statistics in both PDF and CSV formats, with support for filtering by date range, sub-city, and officer."
-
-New module at `apps/api/src/modules/reports/`:
-
-| Endpoint | Roles | Output |
-|---|---|---|
-| `GET /reports/registrations?from=&to=&subCity=&format=` | LandOfficer, SystemAdmin | Land parcel rows with owner name + national ID (authed report) |
-| `GET /reports/transfers?from=&to=&subCity=&format=` | LandOfficer, SystemAdmin | Transfer rows with seller/buyer/parcel/status |
-| `GET /reports/tax-compliance?from=&to=&subCity=&format=` | TaxOfficial, SystemAdmin | Summary aggregates (total, calculated, paid, outstanding, holds, byStatus) + per-record rows |
-| `GET /reports/operations?from=&to=&format=` | SystemAdmin | Aggregate counts: parcels, transfers (by status), payments, completed payments, total tax collected, appointments, audit logs |
-
-All endpoints accept `from`, `to`, `subCity` query filters per the PDF. All
-support `format=csv` for CSV export (proper escaping). All views are
-audit-logged as `ReportView`.
-
-### 6. Public search module (FR-10)
-> FR-10: "Search public land records by parcel ID, owner name, or location."
-> PROJECT_DECISIONS.md: "Public search — Which fields are public, whether owner name is truly public, consent/legal basis, result granularity, rate limits, and anti-enumeration rules. Until decided, expose no private ownership/document data."
-
-New module at `apps/api/src/modules/public/`:
-
-- `GET /public/parcels/search` — public, no auth required
-  - Rate-limited: 20 searches/minute/IP (per SECURITY_DESIGN.md "Implement
-    abuse controls for... public search")
-  - Search params: `q` (free-text across parcel number + sub-city + kebele +
-    location), `parcelNumber`, `subCity`, `kebele`, `location`, `page`,
-    `pageSize` (max 50, smaller than authed endpoints)
-  - Returns ONLY public fields: `id`, `parcelNumber`, `subCity`, `kebele`,
-    `location`, `declaredSize`, `sizeUnit`, `landUseType`, `boundaryStatus`,
-    `registeredAt`
-  - EXCLUDES: owner name, national ID, contact info, tax records, ownership
-    history, boundary geometry
-  - Every response includes a `privacyNotice` field documenting the data policy
-  - All searches audit-logged as `PublicSearch` (actorUserId null;
-    IP captured for forensic use)
-
-## Schema additions
-3 new `AuditAction` enum values:
-- `SettingsUpdate` — for `/admin/settings` PATCH
-- `ReportView` — for `/reports/*` GET
-- `PublicSearch` — for `/public/parcels/search` GET
-
-## Frontend additions
-
-### Staff portal — Settings page (`/settings`)
-SystemAdmin can:
-- List all settings
-- Edit a known setting (tax rate, surcharge, cancellation window) with a
-  typed input (number) instead of raw JSON
-- Edit any setting's raw JSON value + description
-- Create new settings from the "Configure a known setting" panel
-
-All changes audit-logged via the API.
-
-### Staff portal — Reports page (`/reports`)
-Role-aware report tabs (LandOfficer sees registrations + transfers;
-TaxOfficial adds tax-compliance; SystemAdmin adds operations). Each report:
-- Date-range + sub-city filters
-- "Apply" button to load JSON
-- "CSV" button to export (uses raw fetch with auth header to download the
-  CSV blob)
-- Operations report renders a metric grid + transfers-by-status badges
-- Tax-compliance report renders summary metrics + by-status badges + per-record table
-- Registrations + transfers reports render a per-record table
-
-### Citizen PWA — Public Search page (`/search`)
-**Accessible without authentication.** Per PDF §4.9 (UI Design Standards)
-this is the public-facing land-records lookup. Includes its own minimal top
-bar (logo + "Sign in" link) so unauthenticated visitors can navigate to
-login. The page:
-- Free-text + sub-city + kebele + location filters
-- Auto-loads the 20 most recent parcels on mount
-- Each result card shows parcel number, sub-city/kebele/location, declared
-  size, land use type, boundary status badge, registration date
-- Privacy notice rendered inline so the user is clear on what's NOT shown
-
-Logged-in citizens can also access via the "Public search" link in the
-citizen top bar.
+### Staff portal
+- Same i18n structure (separate localStorage key so sessions don't bleed)
+- Staff-specific nav keys added: `tax`, `gis`, `reports`, `auditLogs`, `settings`, `users`
+- Layout + AuthContext use `t()` + `syncLanguage` same as citizen PWA
 
 ## Verification
 - `npm run lint`: clean (both apps)
-- `npm run build`: green. Citizen PWA grew to ~240 KB / 71 KB gzipped
-  (added Payments + PublicSearch pages). Staff portal grew to ~390 KB /
-  117 KB gzipped (added Settings + Reports pages).
-- Live boot: API + both Vite dev servers running detached via `setsid`:
-  - `/api/v1/health` → 200
-  - `/admin/settings`, `/reports/registrations`, `/reports/operations` → 401 (auth wall)
-  - `/public/parcels/search?q=DDW` → 500 (no DB; expected — endpoint does a
-    real query, no graceful no-DB path)
-  - All 4 new UI page modules load via Vite HMR (`/src/pages/{Payments,PublicSearch,Settings,Reports}Page.jsx` → 200)
-- OpenAPI now documents **63 endpoints** (up from 56 in M10; +7: 1 settings-list +
-  2 settings-key(GET+PATCH) + 4 reports + 1 public-search = 8, minus the
-  `/admin/users/{id}` GET which was already documented but counted differently)
+- `npm run build`: green
+  - Citizen PWA: 305 KB / 95 KB gzipped (was 240/71 in M11 — added i18next + react-i18next + 2 locale JSON files)
+  - Staff portal: 460 KB / 141 KB gzipped (was 390/117 — same i18n addition)
+- Live boot: API + both Vite dev servers running detached
+  - API: `/api/v1/health` → 200; `/certificates/{id}/{revoke,reissue}` → 401 (auth wall)
+  - Citizen + Staff: `i18n/index.js`, `locales/en.json`, `locales/am.json` all return 200 via Vite HMR
+- OpenAPI now **65 endpoints** (was 63 in M11; added `/certificates/{id}/revoke` + `/certificates/{id}/reissue`)
 
-## What remains (deferred to M12+)
-- **PostGIS swap** (boundary still `Json`) — production-only; dev keeps the
-  in-process polygon overlap detector
-- **Real provider adapters** (telebirr, SMS/email via Africa's Talking/Twilio,
-  certificate signing) — pending external contracts per PROJECT_DECISIONS.md
-- **Multi-instance distributed lock** for the 3 schedulers (appointment
-  reminder, payment timeout, notification retry)
-- **Amharic localization** (NFR-11) — schema supports `preferredLanguage='am'`
-  but the UI is English-only
-- **Document malware scanning/quarantine** — deployment decision per
-  SECURITY_DESIGN.md
-- **Certificate revocation/reissue UI** — admin can currently revoke via
-  direct DB access but no UI surface
-- **Map click-to-edit existing polygon vertices** — currently only draw-new
-  is supported
+## What remains (deferred to M13+)
+- **PostGIS swap** (boundary still `Json`) — production-only; dev keeps the in-process polygon overlap detector
+- **Real provider adapters** (telebirr, SMS/email via Africa's Talking/Twilio, certificate signing) — pending external contracts
+- **Document malware scanning/quarantine** — deployment decision per SECURITY_DESIGN.md
+- **Map click-to-edit existing polygon vertices** — currently only draw-new is supported
 - **Shapefile import** — UI supports GeoJSON only currently
+- **Deep page-level translation** — the Layout shell + nav is fully i18n'd; the page bodies still have hardcoded English strings. The `t()` infrastructure is in place so subsequent commits can replace individual strings without restructuring.
+- **RTL text direction support** — Amharic is LTR so this is not strictly needed, but §4.9.5 mentions "RTL text direction support prepared for future extension to additional languages" — could add `dir="rtl"` switching if Arabic/Farsi are added later.
