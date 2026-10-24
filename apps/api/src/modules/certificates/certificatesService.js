@@ -15,7 +15,7 @@ import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
-import { writeAudit } from '../../middleware/auditMiddleware.js';
+import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
 import { AuditAction, RoleCode } from '@prisma/client';
 
 export async function getCertificate({ id, request }) {
@@ -33,6 +33,8 @@ export async function getCertificate({ id, request }) {
       throw new AppError(403, 'FORBIDDEN', 'You can only access your own certificates.');
     }
   }
+  // NFR-07: audit the view.
+  await auditView(request, 'Certificate', id, { certificateNumber: cert.certificateNumber, status: cert.status });
   return certificateDto(cert, { withRelations: true });
 }
 

@@ -24,7 +24,10 @@ import { certificatesRouter } from './modules/certificates/certificates.routes.j
 import { notificationsRouter, notificationTemplatesRouter } from './modules/notifications/notifications.routes.js';
 import { documentsRouter } from './modules/documents/documents.routes.js';
 import { transferDocumentsRouter } from './modules/transfers/transfers.routes.js';
-import { startReminderScheduler } from './modules/notifications/notificationsService.js';
+import { settingsRouter } from './modules/settings/settings.routes.js';
+import { reportsRouter } from './modules/reports/reports.routes.js';
+import { publicRouter } from './modules/public/public.routes.js';
+import { startReminderScheduler, startNotificationRetryScheduler } from './modules/notifications/notificationsService.js';
 import { startPaymentTimeoutScheduler } from './modules/payments/paymentsService.js';
 
 export function createApp() {
@@ -65,6 +68,16 @@ export function createApp() {
   app.use('/api/v1/admin', adminUsersRouter);
   app.use('/api/v1/admin', auditRouter);
   app.use('/api/v1/admin', notificationTemplatesRouter); // /api/v1/admin/notification-templates
+  app.use('/api/v1/admin', settingsRouter);             // /api/v1/admin/settings
+
+  // Reports — role-restricted inside the service (LandOfficer/SystemAdmin
+  // for registrations+transfers; TaxOfficial/SystemAdmin for tax-compliance;
+  // SystemAdmin for operations).
+  app.use('/api/v1/reports', reportsRouter);
+
+  // Public search — no auth, rate-limited, privacy-respecting per
+  // PROJECT_DECISIONS.md.
+  app.use('/api/v1/public', publicRouter);
 
   // Provider webhooks — separate from user-facing routes; signature-validated.
   app.use('/api/v1/webhooks', webhooksRouter);
@@ -82,4 +95,6 @@ if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SCHEDULER === 't
   startReminderScheduler();
   // PDF §4.5.2: 15-min payment webhook timeout sweeper.
   startPaymentTimeoutScheduler();
+  // PDF §4.3 sub-system 7: notification retry processor with exponential backoff.
+  startNotificationRetryScheduler();
 }

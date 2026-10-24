@@ -194,7 +194,12 @@ export async function login({ input, request }) {
     throw new AppError(401, 'UNAUTHENTICATED', 'Authentication failed.');
   }
   if (env.requireOtpOnLogin && !user.otpVerifiedAt) {
-    throw new AppError(403, 'OTP_REQUIRED', 'OTP verification is required before login.');
+    // FR-02: OTP verification is a mandatory part of the login flow.
+    // The citizen must call POST /auth/otp/request to get a code, then
+    // POST /auth/otp/verify to complete the session. The mock OTP
+    // provider returns the dev code in the response (logged server-side
+    // too) for non-production environments.
+    throw new AppError(403, 'OTP_REQUIRED', 'OTP verification is required before login. Call POST /auth/otp/request, then POST /auth/otp/verify.');
   }
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   await writeAudit(request, AuditAction.Login, {

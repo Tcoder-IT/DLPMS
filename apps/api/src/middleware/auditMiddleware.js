@@ -1,13 +1,21 @@
-// Audit middleware — wraps mutating routes to write an audit entry
-// (SECURITY_DESIGN.md, NFR-07). The middleware is opt-in: routes attach it
-// after the handler completes by calling `request.audit?.write({...})`.
+// Audit middleware helpers — see ../../lib/auditLog.js for the hash chain.
 //
-// For simplicity we expose a helper that routes call directly:
-//   await writeAudit(request, AuditAction.Create, {...})
-// so that the old/new snapshots are captured at the moment of mutation,
-// not after the response. See modules/* for usage.
+// Two paths are exposed:
+//   - `writeAudit(request, action, fields)` for mutations (Create/Update/
+//     Delete/Approve/Reject). Already used by all mutating endpoints in
+//     M3-M10.
+//   - `auditView(request, entityType, entityId)` for sensitive reads per
+//     NFR-07: "All CRUD operations must be logged... 100% of operations
+//     logged" — including views. Added in M11 to close the audit-trail gap
+//     for parcel/transfer/document/certificate/payment detail reads.
+//
+// View audits are best-effort: a failed audit write must not block the
+// response (the user has already been authorized to see the data; we just
+// want the trail). Mutations throw on audit failure because audit
+// integrity matters more than the response in that path.
 
 import { writeAuditEntry } from '../lib/auditLog.js';
+import { AuditAction } from '@prisma/client';
 
 export async function writeAudit(request, action, fields) {
   const actorUserId = request.user?.id ?? null;
@@ -27,8 +35,28 @@ export async function writeAudit(request, action, fields) {
       newSnapshot: fields.newSnapshot ?? null
     });
   } catch (error) {
-    // Audit failures must not silently corrupt the chain; surface them.
     request.log?.error?.({ error }) ?? console.error({ event: 'audit_write_failed', error });
     throw error;
+  }
+}
+
+// Best-effort audit for view operations. Catches and logs the failure
+// without rethrowing — the response should still go out.
+export async function auditView(request, entityType, entityId, extra = {}) {
+  try {
+    return await writeAuditEntry({
+      actorUserId: request.user?.id ?? null,
+      action: AuditAction.View,
+      entityType,
+      entityId,
+      requestId: request.id,
+      ipAddress:
+        request.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+        request.socket?.remoteAddress ??
+        null,
+      newSnapshot: { viewedAt: new Date().toISOString(), ...extra }
+    });
+  } catch (error) {
+    console.error({ event: 'audit_view_failed', entityType, entityId, error: error.message });
   }
 }

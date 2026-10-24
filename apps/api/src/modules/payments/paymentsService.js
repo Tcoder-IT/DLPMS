@@ -12,7 +12,7 @@
 import { z } from 'zod';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
-import { writeAudit } from '../../middleware/auditMiddleware.js';
+import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
 import { AuditAction, PaymentMethod, PaymentStatus } from '@prisma/client';
 import {
   getProviderName,
@@ -126,6 +126,8 @@ export async function getPayment({ id, request }) {
       throw new AppError(403, 'FORBIDDEN', 'You do not have access to this payment.');
     }
   }
+  // NFR-07: audit the view.
+  await auditView(request, 'PaymentTransaction', id, { transactionRef: payment.transactionRef, status: payment.status });
   return paymentDto(payment, { withTaxRecord: true });
 }
 

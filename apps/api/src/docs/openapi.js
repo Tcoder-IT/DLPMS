@@ -738,6 +738,88 @@ export const openapiSpecification = {
         summary: 'Verify the audit hash chain (SystemAdmin)',
         responses: { 200: { description: 'Chain integrity' } }
       }
+    },
+    '/admin/settings': {
+      get: {
+        summary: 'List system settings (FR-27, SystemAdmin). Returns tax rates, fees, appointment cancellation window, notification templates.',
+        responses: { 200: { description: 'Settings list' }, ...errorResponses }
+      }
+    },
+    '/admin/settings/{key}': {
+      get: {
+        summary: 'Get a single setting by key (SystemAdmin)',
+        parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Setting' }, ...errorResponses }
+      },
+      patch: {
+        summary: 'Create or update a setting (FR-27, SystemAdmin). Audited as SettingsUpdate. Common keys: tax.rate_per_sqm_etb, tax.surcharge_factor, appointment.cancellation_window_hours, notification.template.{key}.',
+        parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['value'], properties: { value: { type: 'object' }, description: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Setting updated' }, ...errorResponses }
+      }
+    },
+    '/reports/registrations': {
+      get: {
+        summary: 'Land registrations report (FR-15 part 1, LandOfficer/SystemAdmin). Filter by date range + sub-city; supports ?format=csv export.',
+        parameters: [
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'subCity', in: 'query', schema: { type: 'string' } },
+          { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'csv'] } }
+        ],
+        responses: { 200: { description: 'Registrations report' }, ...errorResponses }
+      }
+    },
+    '/reports/transfers': {
+      get: {
+        summary: 'Transfers report (FR-15 part 2, LandOfficer/SystemAdmin). Filter by date range + sub-city; supports ?format=csv export.',
+        parameters: [
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'subCity', in: 'query', schema: { type: 'string' } },
+          { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'csv'] } }
+        ],
+        responses: { 200: { description: 'Transfers report' }, ...errorResponses }
+      }
+    },
+    '/reports/tax-compliance': {
+      get: {
+        summary: 'Tax compliance report (FR-21, TaxOfficial/SystemAdmin). Filter by date range + sub-city; returns summary aggregates + per-record rows; supports ?format=csv export.',
+        parameters: [
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'subCity', in: 'query', schema: { type: 'string' } },
+          { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'csv'] } }
+        ],
+        responses: { 200: { description: 'Tax compliance report' }, ...errorResponses }
+      }
+    },
+    '/reports/operations': {
+      get: {
+        summary: 'Operational statistics report (SystemAdmin). Aggregates parcel/transfer/payment/appointment/audit counts; supports ?format=csv export.',
+        parameters: [
+          { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'csv'] } }
+        ],
+        responses: { 200: { description: 'Operations report' }, ...errorResponses }
+      }
+    },
+    '/public/parcels/search': {
+      get: {
+        summary: 'Public land records search (FR-10). No auth required; rate-limited (20/min/IP). Returns only public fields (parcel metadata) — no owner name, national ID, contact info, tax records, ownership history, or boundary geometry per PROJECT_DECISIONS.md privacy deference.',
+        security: [],
+        parameters: [
+          { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Free-text across parcel number, sub-city, kebele, location' },
+          { name: 'parcelNumber', in: 'query', schema: { type: 'string' } },
+          { name: 'subCity', in: 'query', schema: { type: 'string' } },
+          { name: 'kebele', in: 'query', schema: { type: 'string' } },
+          { name: 'location', in: 'query', schema: { type: 'string' } },
+          { name: 'page', in: 'query', schema: { type: 'integer' } },
+          { name: 'pageSize', in: 'query', schema: { type: 'integer', maximum: 50 } }
+        ],
+        responses: { 200: { description: 'Public parcel search results with privacyNotice' }, 429: { description: 'Rate limited' } }
+      }
     }
   }
 };

@@ -12,6 +12,8 @@ import TaxDashboardPage from './pages/TaxDashboardPage.jsx';
 import GisPage from './pages/GisPage.jsx';
 import AppointmentsStaffPage from './pages/AppointmentsStaffPage.jsx';
 import AuditLogsPage from './pages/AuditLogsPage.jsx';
+import SettingsPage from './pages/SettingsPage.jsx';
+import ReportsPage from './pages/ReportsPage.jsx';
 import UsersPage from './pages/UsersPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 
@@ -33,6 +35,8 @@ export default function App() {
                 <Route path="/gis" element={<GisPage />} />
                 <Route path="/appointments" element={<AppointmentsStaffPage />} />
                 <Route path="/audit-logs" element={<AuditLogsPage />} />
+                <Route path="/reports" element={<ReportsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/users" element={<UsersPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>

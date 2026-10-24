@@ -1,217 +1,183 @@
-# DLPMS Milestone 10 — Workflow correctness audit + completion
+# DLPMS Milestone 11 — Remaining audit items per PDF (NFR-07, FR-02, FR-10, FR-15, FR-21, FR-27, §4.3 sub-systems 6+7)
 
-This milestone fixes logical flaws in the M3–M9 implementation that violated
-the PDF's state charts and use case workflows. The audit was triggered by
-re-reading PDF §4.5.1 (Land Transfer Request state chart) and §4.5.2 (Payment
-Transaction state chart) carefully against the M4 implementation.
+This milestone closes the audit-trail gaps identified in M10's deferred-items
+list. Every item is mapped to the exact PDF reference that mandates it.
 
-## Critical flaws fixed
+## Backend additions
 
-### 1. `submitTransfer` skipped the auto-tax-check
-**PDF §4.5.1**: "Upon submission, the request transitions to the Submitted
-state, where an **automated tax check is performed** against the Tax Record
-database. If the parcel has outstanding tax dues, the request transitions to
-the Tax Hold state... Once tax clearance is confirmed, the request moves to
-the Under Review state."
+### 1. Audit-on-views (NFR-07)
+> NFR-07: "All CRUD operations must be logged with tamper-evident audit entries including timestamp, user ID, and action type. 100% of operations logged."
 
-**M4 bug**: `submitTransfer` only transitioned Draft → Submitted and stayed
-there. The auto-tax-check was missing.
+Previously only mutations were audited. M11 adds a new `auditView(request,
+entityType, entityId, extra)` helper in `auditMiddleware.js` (best-effort —
+failures are logged but don't block the response). Called from all sensitive
+GET endpoints:
 
-**Fix**: Added `runAutomatedTaxCheck({ transfer, request })` in
-`transfersService.js` that:
-- Queries for an active tax hold on the parcel
-- If hold exists → transitions to `TaxHold`, writes an `Update` audit entry,
-  dispatches a `transfer.tax_hold` notification to the seller (best-effort)
-- If no hold → transitions to `TaxVerified` → `UnderReview` (both audit
-  entries written; the intermediate `TaxVerified` state is a system-internal
-  checkpoint per the state chart with no user-observable side effect)
+| Endpoint | Audit entity |
+|---|---|
+| `GET /parcels/{id}` | LandParcel |
+| `GET /parcels/{id}/ownership-history` | LandParcel (view: 'ownership-history') |
+| `GET /transfers/{id}` | TransferRequest |
+| `GET /documents/{id}` | DocumentMetadata |
+| `GET /certificates/{id}` | Certificate |
+| `GET /payments/{id}` | PaymentTransaction |
 
-`submitTransfer` now calls `runAutomatedTaxCheck` synchronously after the
-Draft → Submitted transition, so the citizen sees the final state
-(`TaxHold` or `UnderReview`) immediately.
+View audits are written **after** authorization checks pass — failed
+authorization (403) does NOT produce an audit row, since the actor was denied
+before seeing the data.
 
-### 2. `TaxHold → Submitted` (re-run tax check), not `TaxHold → TaxVerified`
-**PDF Table 24**: "Tax Hold → Submitted: Citizen pays outstanding tax; tax
-check re-run automatically."
+### 2. OTP required on login by default (FR-02)
+> FR-02: "Login using phone number or email with password and OTP verification."
 
-**M4 bug**: My `ALLOWED_TRANSITIONS` had `TaxHold → TaxVerified`, skipping
-the re-check loop entirely.
+Previously `REQUIRE_OTP_ON_LOGIN` defaulted to `false`. M11 flips the default
+to `true` (opt-out for dev). The error message tells the citizen how to
+proceed: "OTP verification is required before login. Call POST /auth/otp/request, then POST /auth/otp/verify."
 
-**Fix**: Updated the state machine to `TaxHold → Submitted`. The recovery
-path is now: citizen pays → `applyCompletedPayment` (see #3) → finds
-TaxHold transfers on the parcel → transitions them back to Submitted →
-re-runs `runAutomatedTaxCheck` → auto-advances to UnderReview.
+`.env.example` documents the new default + dev override.
 
-### 3. `applyCompletedPayment` didn't re-trigger the tax check
-**PDF Table 24**: the recovery path requires the tax check to re-run after
-the citizen pays.
+### 3. Notification retry processor with exponential backoff (§4.3 sub-system 7)
+> §4.3 sub-system 7: "The notification queue handles retries for failed deliveries with exponential backoff."
 
-**M4 bug**: `applyCompletedPayment` updated the TaxRecord (clearing the
-hold) but did NOT touch any TaxHold transfers on the parcel. They sat
-stuck in TaxHold forever.
+New `startNotificationRetryScheduler()` in `notificationsService.js`. A
+30-second `setInterval` cycle:
+1. Polls `Queued` notifications whose `scheduledAt <= now`.
+2. Attempts mock dispatch (simulates 1% failure rate in dev to exercise the
+   retry path).
+3. On success: marks `Sent`, increments `retryCount`.
+4. On failure: increments `retryCount`, reschedules with exponential backoff
+   (30s → 2m → 8m → 32m → 128m).
+5. After 5 retries: marks `Failed` + logs to console.
 
-**Fix**: After a successful payment, `applyCompletedPayment` now:
-- Re-fetches the TaxRecord to confirm the hold is cleared
-- Finds all `TaxHold` transfers on the same parcel
-- For each: transitions `TaxHold → Submitted` (audit-logged), then calls
-  `runAutomatedTaxCheck` which auto-advances to `UnderReview`
-- All best-effort: payment success must not fail because of a transfer
-  auto-advance error
+Started on boot in `app.js` alongside the appointment reminder scheduler and
+the payment 15-min timeout sweeper. Timer is `unref()`'d for clean process
+exit. Multi-instance deployments need a distributed lock (pg_advisory_lock)
+— out of scope, documented.
 
-### 4. `createParcel` didn't issue the initial Certificate
-**PDF UC-02 step 9**: "System generates a unique Parcel ID and a **digital
-certificate (PDF)**."
+### 4. Settings module (FR-27)
+> FR-27: "Configure system parameters including tax rates, fees, and notification templates."
 
-**M4 bug**: `createParcel` created the parcel + initial ownership history
-row inside a transaction, but did NOT create a `Certificate` row. The
-citizen had no certificate until a transfer happened.
+New module at `apps/api/src/modules/settings/`:
 
-**Fix**: The `$transaction` block now also creates a `Certificate` row
-with a generated `certificateNumber` (`CERT-YYYY-XXXXXXXX`), status
-`Active`, and `qrPayload` linking back to the API verification endpoint.
-Two audit entries are written: `Create` (parcel) and `CertificateIssue`
-(initial registration). A `parcel.registered` SMS notification is
-dispatched to the new owner (best-effort).
+- `GET /admin/settings` — list all settings (SystemAdmin only, audit-logged as `View`)
+- `GET /admin/settings/:key` — fetch single setting
+- `PATCH /admin/settings/:key` — create or update a setting; upsert
+  behavior; audit-logged as `SettingsUpdate` with old + new snapshot
 
-### 5. Payment webhook skipped the `Processing` state
-**PDF §4.5.2**: "If a webhook callback is received from telebirr, the
-transaction moves to the **Processing** state, where the webhook signature
-is validated against the shared secret key and the payment amount is
-verified against the expected tax amount. Upon successful validation, the
-transaction transitions to the **Completed** state... If the signature
-validation fails or the amount does not match, the transaction is marked
-as **Failed**."
+Setting keys are validated against `/^[a-z][a-z0-9._-]{2,99}$/i` to prevent
+typos in code that hard-codes key lookups. Documented known keys:
+`tax.rate_per_sqm_etb`, `tax.surcharge_factor`,
+`appointment.cancellation_window_hours`, `notification.template.{key}`.
 
-**M4 bug**: `handlePaymentWebhook` validated the signature (good) but
-then transitioned directly to `Completed`, skipping `Processing` and
-the amount-verification step.
+### 5. Reports module (FR-15, FR-21, §4.3 sub-system 6)
+> FR-15: "Generate comprehensive reports on land registrations and transfers" (Land Officer)
+> FR-21: "Generate tax compliance reports by period and sub-city" (Tax Official)
+> §4.3 sub-system 6: "The report generator produces land registration summaries, transfer reports, tax collection summaries, and operational statistics in both PDF and CSV formats, with support for filtering by date range, sub-city, and officer."
 
-**Fix**: The webhook handler now:
-1. Transitions `Pending → Processing` (audit-logged)
-2. Verifies the payload amount matches the recorded payment amount
-   exactly (mismatch → `Failed` + admin notification + 409 AMOUNT_MISMATCH)
-3. Only then proceeds to `applyCompletedPayment` which transitions
-   `Processing → Completed`
+New module at `apps/api/src/modules/reports/`:
 
-### 6. Payment 15-min timeout sweeper missing
-**PDF §4.5.2**: "If no webhook callback is received within 15 minutes, the
-transaction times out and is also marked as Failed."
+| Endpoint | Roles | Output |
+|---|---|---|
+| `GET /reports/registrations?from=&to=&subCity=&format=` | LandOfficer, SystemAdmin | Land parcel rows with owner name + national ID (authed report) |
+| `GET /reports/transfers?from=&to=&subCity=&format=` | LandOfficer, SystemAdmin | Transfer rows with seller/buyer/parcel/status |
+| `GET /reports/tax-compliance?from=&to=&subCity=&format=` | TaxOfficial, SystemAdmin | Summary aggregates (total, calculated, paid, outstanding, holds, byStatus) + per-record rows |
+| `GET /reports/operations?from=&to=&format=` | SystemAdmin | Aggregate counts: parcels, transfers (by status), payments, completed payments, total tax collected, appointments, audit logs |
 
-**M4 bug**: No timeout. Pending payments stayed Pending forever.
+All endpoints accept `from`, `to`, `subCity` query filters per the PDF. All
+support `format=csv` for CSV export (proper escaping). All views are
+audit-logged as `ReportView`.
 
-**Fix**: Added `startPaymentTimeoutScheduler()` in
-`paymentsService.js`. A 5-minute `setInterval` cycle finds all
-payments in `Initiated`/`Pending`/`Processing` whose `initiatedAt` is
-older than 15 minutes, marks them `Failed`, writes a `PaymentFail`
-audit entry with reason "Webhook timeout (15 min)", and dispatches an
-`email` notification to a SystemAdmin ("payment.timeout_investigation")
-per §4.5.2 "the system administrator is notified for manual
-investigation." Started on boot in `app.js` alongside the appointment
-reminder scheduler. Timer is `unref()`'d for clean process exit.
+### 6. Public search module (FR-10)
+> FR-10: "Search public land records by parcel ID, owner name, or location."
+> PROJECT_DECISIONS.md: "Public search — Which fields are public, whether owner name is truly public, consent/legal basis, result granularity, rate limits, and anti-enumeration rules. Until decided, expose no private ownership/document data."
 
-### 7. Receipt PDF generator missing
-**PDF UC-03 step 9**: "System generates a tax receipt (PDF)."
+New module at `apps/api/src/modules/public/`:
 
-**M4 bug**: Only certificates had a PDF generator (M5). Receipts didn't.
+- `GET /public/parcels/search` — public, no auth required
+  - Rate-limited: 20 searches/minute/IP (per SECURITY_DESIGN.md "Implement
+    abuse controls for... public search")
+  - Search params: `q` (free-text across parcel number + sub-city + kebele +
+    location), `parcelNumber`, `subCity`, `kebele`, `location`, `page`,
+    `pageSize` (max 50, smaller than authed endpoints)
+  - Returns ONLY public fields: `id`, `parcelNumber`, `subCity`, `kebele`,
+    `location`, `declaredSize`, `sizeUnit`, `landUseType`, `boundaryStatus`,
+    `registeredAt`
+  - EXCLUDES: owner name, national ID, contact info, tax records, ownership
+    history, boundary geometry
+  - Every response includes a `privacyNotice` field documenting the data policy
+  - All searches audit-logged as `PublicSearch` (actorUserId null;
+    IP captured for forensic use)
 
-**Fix**: Added `apps/api/src/modules/payments/receiptsService.js` with
-`downloadReceiptPdf({ id, request })` that:
-- Loads the payment + linked TaxRecord + parcel + payer
-- Verifies status is `Completed` (409 if not)
-- Ownership-checks (payer OR SystemAdmin/TaxOfficial)
-- Audit-logs the download BEFORE PDF generation
-- Generates a real A5 PDF via `pdfkit` + `qrcode`:
-  - "DIRE DAWA LAND ADMINISTRATION — Property Tax Payment Receipt" header
-  - Transaction reference, receipt date, status
-  - Payment details (amount, method, tax year, calculated/paid/parcel)
-  - Payer block (name, national ID)
-  - QR code linking to `/api/v1/payments/{id}` (verification)
-  - Diagonal "PROTOTYPE — NOT LEGALLY BINDING" watermark
-  - Footer disclaimer about pending signing authority
+## Schema additions
+3 new `AuditAction` enum values:
+- `SettingsUpdate` — for `/admin/settings` PATCH
+- `ReportView` — for `/reports/*` GET
+- `PublicSearch` — for `/public/parcels/search` GET
 
-New endpoint: `GET /payments/{id}/receipt.pdf` (streams PDF, audit-logged).
+## Frontend additions
 
-## Backend correctness — `initiatePayment` state fix
-**PDF §4.5.2**: "the transaction enters the Initiated state and a payment
-request is sent to the telebirr Payment Gateway. The transaction then
-transitions to Pending, where the system waits for the citizen to complete
-the payment on their mobile device."
+### Staff portal — Settings page (`/settings`)
+SystemAdmin can:
+- List all settings
+- Edit a known setting (tax rate, surcharge, cancellation window) with a
+  typed input (number) instead of raw JSON
+- Edit any setting's raw JSON value + description
+- Create new settings from the "Configure a known setting" panel
 
-**M4 bug**: `initiatePayment` created the row in `Initiated` state and
-left it there.
+All changes audit-logged via the API.
 
-**Fix**: Now creates the row in `Pending` state directly (since the mock
-provider's "request to telebirr" is synchronous). The audit entry
-captures the `Initiated → Pending` transition for traceability.
+### Staff portal — Reports page (`/reports`)
+Role-aware report tabs (LandOfficer sees registrations + transfers;
+TaxOfficial adds tax-compliance; SystemAdmin adds operations). Each report:
+- Date-range + sub-city filters
+- "Apply" button to load JSON
+- "CSV" button to export (uses raw fetch with auth header to download the
+  CSV blob)
+- Operations report renders a metric grid + transfers-by-status badges
+- Tax-compliance report renders summary metrics + by-status badges + per-record table
+- Registrations + transfers reports render a per-record table
 
-## New UI — closes end-to-end workflow gaps
+### Citizen PWA — Public Search page (`/search`)
+**Accessible without authentication.** Per PDF §4.9 (UI Design Standards)
+this is the public-facing land-records lookup. Includes its own minimal top
+bar (logo + "Sign in" link) so unauthenticated visitors can navigate to
+login. The page:
+- Free-text + sub-city + kebele + location filters
+- Auto-loads the 20 most recent parcels on mount
+- Each result card shows parcel number, sub-city/kebele/location, declared
+  size, land use type, boundary status badge, registration date
+- Privacy notice rendered inline so the user is clear on what's NOT shown
 
-### Citizen PWA — Payments page (`/payments`)
-Per PDF Figure 30 wireframe ("Property Tax Payment - Mobile"). Lets the
-citizen:
-1. Select a parcel → see outstanding tax records
-2. Initiate a mock telebirr payment for a tax record (auto-fills the
-   outstanding amount)
-3. **Replay the signed webhook callback** — the mock provider returns a
-   signed payload + signature in the `initiate` response; the citizen
-   clicks "Replay webhook callback" to POST it to
-   `/webhooks/payments/telebirr`. This simulates the citizen completing
-   the payment on their phone.
-4. View payment history (walks all their parcels' tax records' embedded
-   payments, most recent first)
-5. Download the receipt PDF for Completed payments
-
-A contextual banner reminds the citizen: "When a tax hold is cleared, any
-transfers on this parcel that were in TaxHold state automatically
-re-submit and re-run the tax check (PDF §4.5.1 Table 24)."
-
-### Staff portal — Parcel detail page (`/parcels/:id`)
-Officers can now click a parcel from the list page and see:
-- Full parcel metadata + boundary status badge
-- "Open in GIS" button linking to the map page
-- Current owner block (name + national ID)
-- Ownership history chain (Past vs Current badges)
-- Tax records list with hold status
-
-Replaces the previous behavior where `/parcels/:id` just rendered the
-list page (an M8 placeholder).
-
-### Staff portal — Appointments management page (`/appointments`)
-LandOfficers can now see their schedule:
-- Today / This week / All filter buttons
-- Each appointment card shows service type, scheduled time, purpose,
-  citizen name + national ID, status badge, cancellation reason (if any)
-
-Replaces the previous placeholder that redirected to the dashboard.
+Logged-in citizens can also access via the "Public search" link in the
+citizen top bar.
 
 ## Verification
-- `npm run lint`: clean (both apps).
-- `npm run build`: green. Citizen PWA 231 KB / 69 KB gzipped (was 222 /
-  67 in M9 — added Payments page). Staff portal 376 KB / 113 KB gzipped
-  (was 370 / 112 — added parcel detail + appointments pages).
-- Smoke test (4 endpoints): all return expected codes:
-  - `/health` → 200
-  - `/transfers/{id}/submit` (no auth) → 401 (auth wall)
-  - `/payments/{id}/receipt.pdf` (no auth) → 401 (new endpoint reachable)
-  - `/webhooks/payments/telebirr` (no auth, no signature) → 401 (signature
-    validation returns cleanly even with DB unreachable — best-effort audit
-    swallow logs the Prisma error without breaking the response)
-- OpenAPI at `/api-docs` now documents **56 endpoints** (added
-  `/payments/{id}/receipt.pdf`).
+- `npm run lint`: clean (both apps)
+- `npm run build`: green. Citizen PWA grew to ~240 KB / 71 KB gzipped
+  (added Payments + PublicSearch pages). Staff portal grew to ~390 KB /
+  117 KB gzipped (added Settings + Reports pages).
+- Live boot: API + both Vite dev servers running detached via `setsid`:
+  - `/api/v1/health` → 200
+  - `/admin/settings`, `/reports/registrations`, `/reports/operations` → 401 (auth wall)
+  - `/public/parcels/search?q=DDW` → 500 (no DB; expected — endpoint does a
+    real query, no graceful no-DB path)
+  - All 4 new UI page modules load via Vite HMR (`/src/pages/{Payments,PublicSearch,Settings,Reports}Page.jsx` → 200)
+- OpenAPI now documents **63 endpoints** (up from 56 in M10; +7: 1 settings-list +
+  2 settings-key(GET+PATCH) + 4 reports + 1 public-search = 8, minus the
+  `/admin/users/{id}` GET which was already documented but counted differently)
 
-## What remains (logical audit, not yet fixed)
-- **Notification queue with retry + exponential backoff** (PDF §4.3
-  sub-system 7) — currently the mock provider marks `Sent` immediately
-- **Audit on view operations** (NFR-07: "All CRUD operations must be
-  logged including views") — currently only mutations are audited
-- **`/admin/settings` endpoints** (FR-27: configure tax rates, fees,
-  notification templates, appointment cancellation window)
-- **`/reports/*` endpoints** (FR-15, FR-21, FR-26)
-- **`/public/parcels/search`** (FR-10) — fields pending business/privacy
-  policy per `PROJECT_DECISIONS.md`
-- **OTP required on login by default** (FR-02 says "password and OTP
-  verification"; currently optional via `REQUIRE_OTP_ON_LOGIN` env)
-- **Real provider adapters** (telebirr, SMS, email, certificate signing)
-- **PostGIS swap** (boundary still stored as `Json`)
-- **Multi-instance distributed lock** for the schedulers
-- **Amharic localization** (NFR-11)
+## What remains (deferred to M12+)
+- **PostGIS swap** (boundary still `Json`) — production-only; dev keeps the
+  in-process polygon overlap detector
+- **Real provider adapters** (telebirr, SMS/email via Africa's Talking/Twilio,
+  certificate signing) — pending external contracts per PROJECT_DECISIONS.md
+- **Multi-instance distributed lock** for the 3 schedulers (appointment
+  reminder, payment timeout, notification retry)
+- **Amharic localization** (NFR-11) — schema supports `preferredLanguage='am'`
+  but the UI is English-only
+- **Document malware scanning/quarantine** — deployment decision per
+  SECURITY_DESIGN.md
+- **Certificate revocation/reissue UI** — admin can currently revoke via
+  direct DB access but no UI surface
+- **Map click-to-edit existing polygon vertices** — currently only draw-new
+  is supported
+- **Shapefile import** — UI supports GeoJSON only currently

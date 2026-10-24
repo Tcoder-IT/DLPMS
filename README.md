@@ -11,21 +11,23 @@ This repository contains the foundation for the Dire Dawa DLPMS university proje
 - `prisma` — Prisma schema + seed for the full entity catalogue (DATABASE_DESIGN.md).
 - `infrastructure` — reserved for deployment/operational assets.
 
-## Milestone 10 (current)
+## Milestone 11 (current)
 
-Correctness audit + workflow completion. Fixes 7 logical flaws in the M3–M9 implementation that violated the PDF state charts (§4.5.1 Land Transfer, §4.5.2 Payment):
-- `submitTransfer` now runs the auto-tax-check (→ TaxHold or UnderReview)
-- `TaxHold → Submitted` recovery loop (was wrongly → TaxVerified)
-- `applyCompletedPayment` auto-advances TaxHold transfers on the parcel
-- `createParcel` atomically issues the initial Certificate (UC-02 step 9)
-- Webhook transitions Pending → Processing → Completed with amount verification
-- 15-min payment timeout sweeper marks stuck payments Failed + notifies admin
-- New receipt PDF generator (UC-03 step 9) at `GET /payments/{id}/receipt.pdf`
+Closes the audit-trail gaps identified in M10's deferred-items list. Every item maps to the exact PDF reference:
+- **NFR-07** audit-on-views for sensitive GETs (parcels, transfers, documents, certificates, payments)
+- **FR-02** OTP required on login by default (was opt-in)
+- **§4.3 sub-system 7** notification retry processor with exponential backoff (30s → 2m → 8m → 32m → 128m, cap 5 retries)
+- **FR-27** new `/admin/settings` endpoints (tax rates, fees, appointment window, notification templates) — SystemAdmin
+- **FR-15, FR-21, §4.3 sub-system 6** new `/reports/{registrations,transfers,tax-compliance,operations}` with date + subCity filters + CSV export
+- **FR-10** new `/public/parcels/search` — public, no auth, rate-limited (20/min/IP), returns only public fields (NO owner name/national ID/contact per PROJECT_DECISIONS.md privacy deference)
 
-New UI: citizen PWA Payments page (initiate telebirr + replay webhook + download receipt), staff portal parcel detail page, staff portal appointments management page. See `MILESTONE.md` for the full audit.
+3 new AuditAction values: `SettingsUpdate`, `ReportView`, `PublicSearch`.
+
+UI: staff portal Settings page + Reports page; citizen PWA Public Search page (accessible without auth). OpenAPI now 63 endpoints. See `MILESTONE.md` for the full scope.
 
 ## Earlier milestones
 
+- **M10** — workflow correctness audit (7 logical flaws fixed in transfer + payment state machines).
 - **M9** — citizen PWA document upload UI + staff portal Leaflet map UI.
 - **M8** — frontend integration (citizen PWA + staff portal wired to the API).
 - **M7** — *(skipped; PostGIS swap deferred)*

@@ -1,6 +1,6 @@
 // Staff app shell — role-aware nav that hides links the user's role cannot use.
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, MapPin, ArrowRightLeft, Receipt, Globe, Calendar, ScrollText, Users, LogOut, ShieldCheck } from 'lucide-react';
+import { Home, MapPin, ArrowRightLeft, Receipt, Globe, Calendar, ScrollText, Users, Settings as SettingsIcon, FileBarChart, LogOut, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { clsx } from 'clsx';
 import { Badge } from './ui.jsx';
@@ -12,7 +12,9 @@ const NAV = [
   { to: '/tax', label: 'Tax', icon: Receipt, roles: ['TaxOfficial', 'SystemAdmin'] },
   { to: '/gis', label: 'GIS', icon: Globe, roles: ['GISOfficer', 'SystemAdmin'] },
   { to: '/appointments', label: 'Appointments', icon: Calendar, roles: ['LandOfficer', 'SystemAdmin'] },
+  { to: '/reports', label: 'Reports', icon: FileBarChart, roles: ['LandOfficer', 'TaxOfficial', 'SystemAdmin'] },
   { to: '/audit-logs', label: 'Audit logs', icon: ScrollText, roles: ['SystemAdmin'] },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon, roles: ['SystemAdmin'] },
   { to: '/users', label: 'Users', icon: Users, roles: ['SystemAdmin'] }
 ];
 

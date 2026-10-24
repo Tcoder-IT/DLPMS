@@ -15,12 +15,16 @@ import CertificatesPage from './pages/CertificatesPage.jsx';
 import NotificationsPage from './pages/NotificationsPage.jsx';
 import DocumentsPage from './pages/DocumentsPage.jsx';
 import PaymentsPage from './pages/PaymentsPage.jsx';
+import PublicSearchPage from './pages/PublicSearchPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 
 export default function App() {
   return (
     <AuthProvider>
       <Routes>
+        {/* Public-only route: accessible without auth */}
+        <Route path="/search" element={<PublicSearchPage />} />
+
         {/* Public-only routes (redirect to / if already logged in) */}
         <Route path="/login" element={<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>} />
         <Route path="/register" element={<PublicOnlyRoute><RegisterPage /></PublicOnlyRoute>} />

@@ -19,7 +19,7 @@ parcelsRouter.get('/', async (request, response, next) => {
 
 parcelsRouter.get('/:id', async (request, response, next) => {
   try {
-    const result = await parcelsService.getParcel({ id: request.params.id });
+    const result = await parcelsService.getParcel({ id: request.params.id, request });
     response.json(result);
   } catch (error) {
     next(error);
@@ -28,7 +28,7 @@ parcelsRouter.get('/:id', async (request, response, next) => {
 
 parcelsRouter.get('/:id/ownership-history', async (request, response, next) => {
   try {
-    const result = await parcelsService.listOwnershipHistory({ id: request.params.id });
+    const result = await parcelsService.listOwnershipHistory({ id: request.params.id, request });
     response.json(result);
   } catch (error) {
     next(error);

@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
-import { writeAudit } from '../../middleware/auditMiddleware.js';
+import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
 import { AuditAction, DocumentVerificationStatus, RoleCode } from '@prisma/client';
 import { persistFile, streamFile } from '../../lib/storageAdapter.js';
 
@@ -155,6 +155,8 @@ export async function getDocument({ id, request }) {
       throw new AppError(403, 'FORBIDDEN', 'You do not have access to this document.');
     }
   }
+  // NFR-07: audit the view.
+  await auditView(request, 'DocumentMetadata', id, { originalFilename: doc.originalFilename, classification: doc.classification });
   return documentDto(doc, { withStorage: false });
 }
 

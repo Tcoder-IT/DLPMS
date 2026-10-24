@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
-import { writeAudit } from '../../middleware/auditMiddleware.js';
+import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
 import { AuditAction, TransferStatus } from '@prisma/client';
 import { dispatchNotification } from '../notifications/notificationsService.js';
 
@@ -230,6 +230,9 @@ export async function getTransfer({ id, request }) {
       throw new AppError(403, 'FORBIDDEN', 'You do not have access to this transfer.');
     }
   }
+  // NFR-07: audit the view (after authorization — failed authz still gets
+  // a 403 without an audit row, since the actor was denied).
+  await auditView(request, 'TransferRequest', id, { trackingId: transfer.trackingId, status: transfer.status });
   return transferDto(transfer, { withDocuments: true });
 }
 

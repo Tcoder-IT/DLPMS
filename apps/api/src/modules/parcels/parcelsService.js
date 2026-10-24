@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { db } from '../../lib/prisma.js';
 import { AppError } from '../../errors/AppError.js';
-import { writeAudit } from '../../middleware/auditMiddleware.js';
+import { writeAudit, auditView } from '../../middleware/auditMiddleware.js';
 import { AuditAction } from '@prisma/client';
 import { dispatchNotification } from '../notifications/notificationsService.js';
 
@@ -83,7 +83,7 @@ export async function listParcels({ query }) {
   return { items: items.map(parcelDto), page, pageSize, total };
 }
 
-export async function getParcel({ id }) {
+export async function getParcel({ id, request }) {
   const parcel = await db.landParcel.findUnique({
     where: { id },
     include: { currentOwner: true, properties: true, ownershipHistory: { include: { owner: true }, orderBy: { startedAt: 'desc' } } }
@@ -91,6 +91,8 @@ export async function getParcel({ id }) {
   if (!parcel) {
     throw new AppError(404, 'NOT_FOUND', 'Parcel not found.');
   }
+  // NFR-07: audit all CRUD operations including views.
+  await auditView(request, 'LandParcel', id, { parcelNumber: parcel.parcelNumber });
   return parcelDto(parcel, { withHistory: true, withProperties: true });
 }
 
@@ -238,7 +240,7 @@ export async function patchParcel({ id, input, request }) {
   return parcelDto(updated);
 }
 
-export async function listOwnershipHistory({ id }) {
+export async function listOwnershipHistory({ id, request }) {
   const parcel = await db.landParcel.findUnique({
     where: { id },
     include: {
@@ -251,6 +253,8 @@ export async function listOwnershipHistory({ id }) {
   if (!parcel) {
     throw new AppError(404, 'NOT_FOUND', 'Parcel not found.');
   }
+  // NFR-07: audit the view.
+  await auditView(request, 'LandParcel', id, { view: 'ownership-history' });
   return {
     parcelId: parcel.id,
     parcelNumber: parcel.parcelNumber,

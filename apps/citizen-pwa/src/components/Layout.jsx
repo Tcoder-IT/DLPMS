@@ -1,7 +1,7 @@
 // App shell — top bar with logout + nav links, main content area.
 
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, MapPin, ArrowRightLeft, Calendar, FileText, Bell, FolderOpen, CreditCard, LogOut, ShieldCheck } from 'lucide-react';
+import { Home, MapPin, ArrowRightLeft, Calendar, FileText, Bell, FolderOpen, CreditCard, Search, LogOut, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { clsx } from 'clsx';
 import { Badge } from './ui.jsx';
@@ -37,6 +37,9 @@ export default function Layout({ children }) {
             <span className="sm:hidden">DLPMS</span>
           </Link>
           <div className="flex items-center gap-3">
+            <Link to="/search" className="inline-flex items-center gap-1 text-sm text-slate-700 hover:text-blue-700">
+              <Search size={14} /> <span className="hidden sm:inline">Public search</span>
+            </Link>
             <span className="hidden text-sm text-slate-600 sm:inline">
               {user?.phoneNumber}
             </span>

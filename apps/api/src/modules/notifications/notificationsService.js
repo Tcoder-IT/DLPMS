@@ -201,3 +201,132 @@ export async function getMyUnreadCount({ request }) {
   });
   return { unread: count };
 }
+
+// ---------------------------------------------------------------------------
+// Notification retry processor with exponential backoff
+//
+// PDF §4.3 sub-system 7: "The notification queue handles retries for failed
+// deliveries with exponential backoff." The mock provider always succeeds on
+// first attempt for dev convenience, but the production swap-in path needs
+// the retry queue plumbed in. The processor:
+//
+//   1. Polls Queued notifications whose scheduledAt <= now.
+//   2. For each, attempts dispatch via the mock provider (always succeeds).
+//   3. On a hypothetical failure (status remains Queued after attempt),
+//      increments retryCount, reschedules with exponential backoff:
+//          attempt 1: now + 30s
+//          attempt 2: now + 2m
+//          attempt 3: now + 8m
+//          attempt 4: now + 32m
+//          attempt 5: now + 128m
+//      After MAX_RETRIES (5) attempts, marks Failed + logs to console.
+//
+// Multi-instance deployments need a distributed lock (pg_advisory_lock) to
+// prevent duplicate dispatch.
+// ---------------------------------------------------------------------------
+
+const RETRY_INTERVAL_MS = 30 * 1000; // poll every 30s
+const MAX_RETRIES = 5;
+const BACKOFF_MS = [30_000, 120_000, 480_000, 1_920_000, 7_680_000]; // 30s, 2m, 8m, 32m, 128m
+
+let retryTimer = null;
+
+export function startNotificationRetryScheduler() {
+  if (retryTimer) return retryTimer;
+  retryTimer = setInterval(runRetryCycle, RETRY_INTERVAL_MS);
+  retryTimer.unref?.();
+  return retryTimer;
+}
+
+export function stopNotificationRetryScheduler() {
+  if (retryTimer) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+}
+
+async function runRetryCycle() {
+  try {
+    const due = await db.notification.findMany({
+      where: {
+        status: NotificationStatus.Queued,
+        scheduledAt: { lte: new Date() }
+      },
+      take: 50,
+      orderBy: { scheduledAt: 'asc' }
+    });
+    for (const n of due) {
+      await processNotificationAttempt(n);
+    }
+  } catch (error) {
+    console.error({ event: 'notification_retry_cycle_failed', error: error.message });
+  }
+}
+
+async function processNotificationAttempt(notification) {
+  // Mock dispatch: log + mark Sent. In production this is where the
+  // Africa's Talking / Twilio / email adapter is invoked.
+  try {
+    // Simulate a 1% failure rate to exercise the retry path even in dev.
+    const shouldFail = process.env.NODE_ENV !== 'production' && Math.random() < 0.01;
+    if (shouldFail && notification.retryCount < MAX_RETRIES - 1) {
+      throw new Error('Simulated dispatch failure');
+    }
+    await db.notification.update({
+      where: { id: notification.id },
+      data: {
+        status: NotificationStatus.Sent,
+        sentAt: new Date(),
+        providerRef: `mock-${notification.channel}-${Date.now()}`,
+        retryCount: { increment: 1 }
+      }
+    });
+    if (process.env.NODE_ENV !== 'production') {
+      console.info({
+        event: 'notification_dispatched',
+        notificationId: notification.id,
+        channel: notification.channel,
+        templateKey: notification.templateKey,
+        retryCount: notification.retryCount + 1
+      });
+    }
+  } catch (error) {
+    // Retry path: increment retryCount, reschedule with exponential backoff.
+    const nextRetryCount = notification.retryCount + 1;
+    if (nextRetryCount >= MAX_RETRIES) {
+      // Give up — mark Failed.
+      await db.notification.update({
+        where: { id: notification.id },
+        data: {
+          status: NotificationStatus.Failed,
+          retryCount: nextRetryCount,
+          providerRef: `failed-after-${nextRetryCount}-attempts`
+        }
+      });
+      console.error({
+        event: 'notification_permanently_failed',
+        notificationId: notification.id,
+        templateKey: notification.templateKey,
+        retries: nextRetryCount,
+        error: error.message
+      });
+    } else {
+      const backoffMs = BACKOFF_MS[Math.min(nextRetryCount - 1, BACKOFF_MS.length - 1)];
+      const nextScheduledAt = new Date(Date.now() + backoffMs);
+      await db.notification.update({
+        where: { id: notification.id },
+        data: {
+          retryCount: nextRetryCount,
+          scheduledAt: nextScheduledAt
+        }
+      });
+      console.warn({
+        event: 'notification_retry_scheduled',
+        notificationId: notification.id,
+        attempt: nextRetryCount,
+        nextAttemptAt: nextScheduledAt.toISOString(),
+        backoffMs
+      });
+    }
+  }
+}
