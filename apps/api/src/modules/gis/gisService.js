@@ -1,12 +1,12 @@
 // GIS module — implements boundary management per API_DESIGN.md and
 // WORKFLOWS.md §5. Per PROJECT_DECISIONS.md, the production schema uses
 // PostGIS geometry(Polygon, 4326) with a GiST index and ST_Intersects for
-// overlap detection. The current milestone stores boundaries as GeoJSON
-// `Polygon` in `LandParcel.boundaryJson` (Json column) and runs an in-process
-// polygon overlap check using the Separating Axis Theorem (SAT) for
-// convex-vs-convex and segment-intersection for the general case. This is
-// sufficient for the prototype; the production swap to ST_Intersects is a
-// localized change inside this module.
+// overlap detection.
+//
+// M13 (Supabase): now using real PostGIS 3.3.7 on Supabase. The `boundary_geom`
+// column (geometry(Polygon, 4326)) is synced from `boundaryJson` (GeoJSON
+// source of truth) on every boundary write. Overlap detection uses ST_Intersects
+// with the GiST index for O(log n) performance.
 
 import { z } from 'zod';
 import { db } from '../../lib/prisma.js';
@@ -117,6 +117,8 @@ export async function putBoundary({ id, input, request }) {
       version: { increment: 1 }
     }
   });
+  // Sync the GeoJSON into the PostGIS geometry column via ST_GeomFromGeoJSON
+  await db.$executeRaw`UPDATE land_parcels SET boundary_geom = ST_GeomFromGeoJSON(${JSON.stringify(parsed.data.geometry)}) WHERE id = ${id}`;
   await writeAudit(request, AuditAction.Update, {
     entityType: 'LandParcel',
     entityId: id,
@@ -140,22 +142,17 @@ export async function verifyBoundary({ id, request }) {
   if (!parcel.boundaryJson) {
     throw new AppError(400, 'NO_BOUNDARY', 'Parcel has no boundary geometry. PUT /gis/parcels/{id}/boundary first.');
   }
-  // Find all OTHER parcels that have a boundary, then test pairwise for overlap.
-  const others = await db.landParcel.findMany({
-    where: { id: { not: id }, boundaryJson: { not: null } },
-    select: { id: true, parcelNumber: true, boundaryJson: true, subCity: true, kebele: true }
-  });
-  const overlaps = [];
-  for (const other of others) {
-    if (polygonsOverlap(parcel.boundaryJson, other.boundaryJson)) {
-      overlaps.push({
-        parcelId: other.id,
-        parcelNumber: other.parcelNumber,
-        subCity: other.subCity,
-        kebele: other.kebele
-      });
-    }
-  }
+  // PostGIS ST_Intersects — O(log n) via GiST index, far faster than the
+  // previous in-process pairwise polygon math.
+  const overlaps = await db.$queryRaw`
+    SELECT id AS "parcelId", "parcelNumber", "subCity", kebele
+    FROM land_parcels
+    WHERE id != ${id}
+      AND boundary_geom IS NOT NULL
+      AND ST_Intersects(boundary_geom, (
+        SELECT boundary_geom FROM land_parcels WHERE id = ${id}
+      ))
+  `;
   const newStatus = overlaps.length === 0 ? 'Verified' : 'OverlapConflict';
   const updated = await db.landParcel.update({
     where: { id },
@@ -198,6 +195,8 @@ export async function importBoundaries({ input, request }) {
         version: { increment: 1 }
       }
     });
+    // Sync to PostGIS geometry column
+    await db.$executeRaw`UPDATE land_parcels SET boundary_geom = ST_GeomFromGeoJSON(${JSON.stringify(feat.geometry)}) WHERE id = ${feat.parcelId}`;
     await writeAudit(request, AuditAction.Update, {
       entityType: 'LandParcel',
       entityId: feat.parcelId,
@@ -210,27 +209,28 @@ export async function importBoundaries({ input, request }) {
 }
 
 export async function listOverlaps({ query }) {
-  // Walk all parcels that have a boundary; report pairwise overlaps.
-  // For large datasets this should be a PostGIS ST_Intersects query; for the
-  // prototype this in-process scan is acceptable.
+  // PostGIS ST_Intersects self-join — one SQL query instead of O(n²) in-process scan.
   const limit = Math.min(Number(query?.limit ?? 100), 500);
-  const parcels = await db.landParcel.findMany({
-    where: { boundaryJson: { not: null } },
-    select: { id: true, parcelNumber: true, subCity: true, kebele: true, boundaryJson: true },
-    take: limit
-  });
-  const overlaps = [];
-  for (let i = 0; i < parcels.length; i++) {
-    for (let j = i + 1; j < parcels.length; j++) {
-      if (polygonsOverlap(parcels[i].boundaryJson, parcels[j].boundaryJson)) {
-        overlaps.push({
-          a: { id: parcels[i].id, parcelNumber: parcels[i].parcelNumber, subCity: parcels[i].subCity, kebele: parcels[i].kebele },
-          b: { id: parcels[j].id, parcelNumber: parcels[j].parcelNumber, subCity: parcels[j].subCity, kebele: parcels[j].kebele }
-        });
-      }
-    }
-  }
-  return { scanned: parcels.length, overlaps: overlaps.length, items: overlaps };
+  const overlaps = await db.$queryRaw`
+    WITH bounded AS (
+      SELECT id, "parcelNumber", "subCity", kebele, boundary_geom
+      FROM land_parcels
+      WHERE boundary_geom IS NOT NULL
+      LIMIT ${limit}
+    )
+    SELECT
+      a.id AS a_id, a."parcelNumber" AS a_parcel, a."subCity" AS a_sub, a.kebele AS a_kebele,
+      b.id AS b_id, b."parcelNumber" AS b_parcel, b."subCity" AS b_sub, b.kebele AS b_kebele
+    FROM bounded a
+    CROSS JOIN bounded b
+    WHERE a.id < b.id
+      AND ST_Intersects(a.boundary_geom, b.boundary_geom)
+  `;
+  const items = overlaps.map(r => ({
+    a: { id: r.a_id, parcelNumber: r.a_parcel, subCity: r.a_sub, kebele: r.a_kebele },
+    b: { id: r.b_id, parcelNumber: r.b_parcel, subCity: r.b_sub, kebele: r.b_kebele }
+  }));
+  return { scanned: limit, overlaps: items.length, items };
 }
 
 // ---------------------------------------------------------------------------
